@@ -1,0 +1,26 @@
+[Unit]
+Description=Orclaw — bidirectional Telegram bot (long-polling)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orclaw
+Group=orclaw
+WorkingDirectory=/opt/orclaw
+EnvironmentFile=/etc/orclaw/secrets.env
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/opt/orclaw/.venv/bin/orclaw telegram-bot
+Restart=on-failure
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/orclaw /tmp
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

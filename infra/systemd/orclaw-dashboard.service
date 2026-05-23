@@ -1,0 +1,33 @@
+[Unit]
+Description=Orclaw — web dashboard (FastAPI + uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=engine
+Group=engine
+WorkingDirectory=/opt/orclaw
+EnvironmentFile=/etc/orclaw/secrets.env
+Environment="PYTHONUNBUFFERED=1"
+# Bind to loopback — Cloudflare Tunnel handles public exposure + Access auth.
+ExecStart=/opt/orclaw/.venv/bin/orclaw dashboard serve --host=127.0.0.1 --port=8766
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/orclaw /tmp
+ProtectHome=true
+PrivateTmp=true
+# NB: NoNewPrivileges intentionally NOT set. The overlay layer
+# (orclaw.overlay) shells out to `sudo systemctl ...` and
+# `sudo cp ... /etc/systemd/system/` so the user can edit timers from
+# the dashboard. The engine user has NOPASSWD: ALL in sudoers, so this
+# is the only escalation surface — and it's gated by Cloudflare Access
+# at the edge.
+
+[Install]
+WantedBy=multi-user.target

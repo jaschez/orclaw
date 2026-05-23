@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily Orclaw SQLite backup
+
+[Service]
+Type=oneshot
+User=engine
+EnvironmentFile=/etc/orclaw/secrets.env
+ExecStart=/opt/orclaw/infra/scripts/backup.sh

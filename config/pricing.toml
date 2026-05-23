@@ -1,0 +1,29 @@
+# Anthropic API pricing snapshot (USD per million tokens)
+# Source of truth: https://www.anthropic.com/pricing
+# Update when Anthropic changes prices. Historical entries in token_ledger
+# keep the price at the time of the run (we store final cost_usd_cents).
+
+# As of 2026-05-22:
+
+[models."claude-sonnet-4-6-20260101"]
+input_per_mtok = 3.00
+output_per_mtok = 15.00
+cache_read_per_mtok = 0.30
+cache_write_per_mtok = 3.75
+
+[models."claude-opus-4-7-20260101"]
+input_per_mtok = 15.00
+output_per_mtok = 75.00
+cache_read_per_mtok = 1.50
+cache_write_per_mtok = 18.75
+
+[models."claude-haiku-4-5"]
+input_per_mtok = 0.25
+output_per_mtok = 1.25
+cache_read_per_mtok = 0.03
+cache_write_per_mtok = 0.30
+
+# Conversion (overridden by ECB rates if [exchange] live = true)
+[exchange]
+live = false
+fallback_usd_to_eur = 0.92

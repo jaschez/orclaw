@@ -1,0 +1,11 @@
+[Unit]
+Description=Run orclaw-runner-monitor every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+AccuracySec=15s
+Unit=orclaw-runner-monitor.service
+
+[Install]
+WantedBy=timers.target

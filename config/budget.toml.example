@@ -1,0 +1,32 @@
+# orclaw budget config — copy to /etc/orclaw/budget.toml
+
+[budget]
+# Monthly target in EUR. The orchestrator pauses spawns when crossed.
+monthly_eur_target = 50
+
+# Warn (notification, label, etc.) at this % of target.
+warning_at_pct = 70
+
+# Hard stop new implementer spawns at this %.
+hard_stop_at_pct = 95
+
+[concurrency]
+# How many implementers can run in parallel, by budget tier.
+# "healthy" = monthly spend < 50% of target
+# "lean" = 50-80%
+# "critical" = > 80%
+cap_healthy = 5
+cap_lean = 2
+cap_critical = 1
+
+# Absolute ceiling regardless of budget (anti-runaway).
+absolute_max = 10
+
+[models]
+# Which model to use by default for each agent.
+implementer_default = "claude-sonnet-4-6-20260101"
+implementer_high_complexity = "claude-opus-4-7-20260101"
+reviewer = "claude-sonnet-4-6-20260101"
+
+# Retry strategy: if implementer fails with sonnet, retry once with opus.
+retry_with_opus_on_failure = true

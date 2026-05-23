@@ -1,0 +1,9 @@
+[Unit]
+Description=Sync ${TARGET_REPO} mirror
+
+[Service]
+Type=oneshot
+User=engine
+WorkingDirectory=/var/lib/orclaw/${TARGET_REPO}-mirror
+ExecStart=/usr/bin/git fetch --quiet origin develop
+ExecStart=/usr/bin/git -c advice.detachedHead=false checkout -q -f origin/develop

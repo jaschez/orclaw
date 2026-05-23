@@ -1,0 +1,29 @@
+[Unit]
+Description=Orclaw — self-hosted runner health + activity monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=engine
+Group=engine
+WorkingDirectory=/opt/orclaw
+EnvironmentFile=/etc/orclaw/secrets.env
+Environment="PYTHONUNBUFFERED=1"
+# Checks systemctl is-active on the runner unit, flips the ORCLAW_RUNNER
+# repo variable on transitions, scans recent workflow runs for suspicious
+# patterns. Fires Telegram alerts on both.
+ExecStart=/opt/orclaw/.venv/bin/orclaw runner monitor
+StandardOutput=journal
+StandardError=journal
+
+TimeoutStartSec=60
+
+# Hardening — note we do NOT add ProtectSystem=strict because this unit
+# legitimately needs to call systemctl is-active on the actions runner
+# unit (read-only systemd operation, but systemd's namespace isolation
+# can interfere). ReadWritePaths kept tight.
+ReadWritePaths=/var/lib/orclaw /tmp
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true

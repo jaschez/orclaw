@@ -1,0 +1,16 @@
+[Unit]
+Description=Daily Orclaw digest at 23:00 Europe/Madrid
+
+[Timer]
+# Explicit Europe/Madrid TZ so the digest lands at 23:00 local time
+# year-round (handles DST automatically). The VM stays on UTC; only this
+# timer cares about local time. Requires systemd ≥ 245.
+# Syntax: <calendar-event> <time> <timezone> — TZ goes AT THE END.
+OnCalendar=*-*-* 23:00:00 Europe/Madrid
+# If the host was off when the timer should have fired, run on next boot.
+Persistent=true
+AccuracySec=1min
+Unit=orclaw-summary.service
+
+[Install]
+WantedBy=timers.target

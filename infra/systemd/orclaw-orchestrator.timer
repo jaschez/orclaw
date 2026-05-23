@@ -1,0 +1,18 @@
+[Unit]
+Description=Run the Orclaw orchestrator every 30 seconds
+# Each firing triggers orclaw-orchestrator.service (oneshot). If a tick
+# is still running when the timer fires, systemd queues — it never
+# stacks parallel ticks.
+
+[Timer]
+# First tick 1min after boot so other services (network, etc.) settle.
+OnBootSec=1min
+# Subsequent ticks every 30s after the previous one *finished*.
+# OnUnitInactiveSec is important here — OnUnitActiveSec would count
+# from start, which can drift with long ticks.
+OnUnitInactiveSec=30s
+AccuracySec=5s
+Unit=orclaw-orchestrator.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+[Unit]
+Description=Orclaw — batch planner (oneshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=engine
+Group=engine
+WorkingDirectory=/opt/orclaw
+EnvironmentFile=/etc/orclaw/secrets.env
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/opt/orclaw/.venv/bin/orclaw planner run
+StandardOutput=journal
+StandardError=journal
+
+TimeoutStartSec=300
+
+# Hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/orclaw /tmp
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true

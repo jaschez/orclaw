@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly purge of events older than 30 days
+
+[Timer]
+# Sundays at 03:00 UTC — quietest hour, no other timers near it.
+OnCalendar=Sun *-*-* 03:00:00
+Persistent=true
+AccuracySec=5min
+Unit=orclaw-events-purge.service
+
+[Install]
+WantedBy=timers.target

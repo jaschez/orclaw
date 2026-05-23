@@ -1,0 +1,29 @@
+[Unit]
+Description=Orclaw — specialist MCP server (HTTP transport)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=engine
+Group=engine
+WorkingDirectory=/opt/orclaw
+EnvironmentFile=/etc/orclaw/secrets.env
+Environment="PYTHONUNBUFFERED=1"
+# Bind to localhost only — the Cloudflare Tunnel daemon handles the
+# public-facing TLS + Zero Trust auth. Never expose this port directly.
+ExecStart=/opt/orclaw/.venv/bin/orclaw specialist serve --transport=http --host=127.0.0.1 --port=8765
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/orclaw /tmp
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

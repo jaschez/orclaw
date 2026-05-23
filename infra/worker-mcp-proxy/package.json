@@ -1,0 +1,21 @@
+{
+  "name": "orclaw-mcp-proxy",
+  "version": "0.1.0",
+  "description": "Cloudflare Worker that fronts orclaw's specialist MCP server with OAuth 2.1 + Cloudflare Access for SaaS.",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.0.5",
+    "hono": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251020.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^3.95.0"
+  }
+}

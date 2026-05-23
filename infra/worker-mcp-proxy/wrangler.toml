@@ -1,0 +1,57 @@
+# Cloudflare Worker — OAuth shim + proxy for the orclaw specialist MCP.
+#
+# Architecture:
+#   claude.ai / Claude Desktop / MCP Inspector
+#       │ OAuth 2.1 (Bearer token issued by this Worker)
+#       ▼
+#   THIS WORKER (mcp-proxy.<YOUR_TEAM>.com)
+#       │ - Handles OAuth 2.1 endpoints (/authorize, /token, /.well-known/*)
+#       │ - Delegates user auth to Cloudflare Access for SaaS (OIDC)
+#       │ - Strips client Bearer, injects CF-Access service token headers
+#       │ - Proxies /mcp to the backend
+#       ▼
+#   https://orclaw.<YOUR_TEAM>.com/mcp  (existing tunnel + specialist)
+
+name = "orclaw-mcp-proxy"
+main = "src/index.ts"
+compatibility_date = "2026-05-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Custom domain bound here once DNS exists. Leave commented for first deploy
+# to *.workers.dev; uncomment + edit after you have the workers.dev URL working.
+# routes = [
+#   { pattern = "mcp-proxy.<YOUR_TEAM>.com/*", custom_domain = true }
+# ]
+
+[observability]
+enabled = true
+
+# Persistent KV store for OAuth state (codes, tokens, client registrations).
+# Create with: npx wrangler kv namespace create OAUTH_KV
+# Then paste the id below.
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "f27a96c34db54cc5862a2ff67a1b6d79"
+
+# Public vars — safe to commit. Secrets live in `wrangler secret put`.
+[vars]
+BACKEND_MCP_URL = "https://orclaw.<YOUR_TEAM>.com/mcp"
+
+# Cloudflare Access for SaaS — OIDC endpoints (NOT secrets).
+ACCESS_AUTHORIZATION_URL = "https://<YOUR_TEAM>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/a9e84c17c9b5d976a47ed802eb13867a334dc373998dc7c09233fa05240fe5c2/authorization"
+ACCESS_TOKEN_URL = "https://<YOUR_TEAM>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/a9e84c17c9b5d976a47ed802eb13867a334dc373998dc7c09233fa05240fe5c2/token"
+ACCESS_JWKS_URL = "https://<YOUR_TEAM>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/a9e84c17c9b5d976a47ed802eb13867a334dc373998dc7c09233fa05240fe5c2/jwks"
+# For SaaS OIDC apps, the id_token's `aud` claim IS the Client ID.
+ACCESS_AUD = "a9e84c17c9b5d976a47ed802eb13867a334dc373998dc7c09233fa05240fe5c2"
+
+# Secrets you'll set separately via:
+#   npx wrangler secret put ACCESS_CLIENT_ID
+#   npx wrangler secret put ACCESS_CLIENT_SECRET
+#   npx wrangler secret put CF_ACCESS_CLIENT_ID
+#   npx wrangler secret put CF_ACCESS_CLIENT_SECRET
+#
+# - ACCESS_CLIENT_ID + ACCESS_CLIENT_SECRET: from the Access for SaaS app
+#   (the Worker uses these to talk OAuth with Cloudflare Access as the IdP).
+# - CF_ACCESS_CLIENT_ID + CF_ACCESS_CLIENT_SECRET: the EXISTING service token
+#   we created for mcp-remote. The Worker reuses it to pass the backend's
+#   Access policy.

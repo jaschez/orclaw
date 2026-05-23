@@ -1,0 +1,93 @@
+#cloud-config
+#
+# Orclaw cloud-init user-data — drop into Proxmox snippets and attach to
+# any Ubuntu 24.04 cloud-image VM. The VM boots, configures itself, runs
+# the orclaw installer non-interactively, and starts serving.
+#
+# Works on any cloud-init host: Proxmox, Hetzner Cloud, AWS EC2, GCP,
+# DigitalOcean — wherever you can hand the cloud-image a user-data file.
+#
+# REPLACE the placeholders below before applying.
+
+hostname: orclaw-01
+manage_etc_hosts: true
+timezone: UTC
+
+# -----------------------------------------------------------------------------
+# user
+# -----------------------------------------------------------------------------
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+    # Paste your public SSH key here so you can log in once it's up.
+    ssh_authorized_keys:
+      - ssh-ed25519 REPLACE_WITH_YOUR_SSH_PUBLIC_KEY
+
+# -----------------------------------------------------------------------------
+# packages — installer pulls the rest
+# -----------------------------------------------------------------------------
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - git
+  - ca-certificates
+
+# -----------------------------------------------------------------------------
+# pre-seed orclaw secrets BEFORE running the installer, so it can run
+# --non-interactive without prompting.
+# -----------------------------------------------------------------------------
+write_files:
+  - path: /etc/orclaw/secrets.env
+    permissions: '0640'
+    owner: 'root:root'   # chown to root:orclaw happens later in runcmd
+    content: |
+      # Pre-seeded by cloud-init. Filled by the installer's user.
+      ORCLAW_GITHUB_REPO=REPLACE_WITH/your-target-repo
+      GITHUB_TOKEN=REPLACE_WITH_YOUR_PAT
+      ORCLAW_CONCURRENCY_MAX_IN_FLIGHT=2
+      ORCLAW_CONCURRENCY_DEFAULT_IN_FLIGHT=2
+      ORCLAW_TELEGRAM_BOT_TOKEN=REPLACE_OR_LEAVE_EMPTY
+      ORCLAW_TELEGRAM_CHAT_ID=REPLACE_OR_LEAVE_EMPTY
+      ORCLAW_DATA_DIR=/var/lib/orclaw
+      ORCLAW_DB_PATH=/var/lib/orclaw/orclaw.db
+      ORCLAW_LOG_LEVEL=INFO
+      ORCLAW_EVENTS_TO_DB=1
+
+  # A boot-time motd so anyone SSHing in knows what they're on.
+  - path: /etc/motd
+    permissions: '0644'
+    content: |
+      ╭───────────────────────────────────────────────╮
+      │  ORCLAW VM — provisioned by cloud-init        │
+      │                                               │
+      │  Dashboard: http://127.0.0.1:8766             │
+      │  Logs:      journalctl -fu orclaw-*           │
+      │  Status:    systemctl status 'orclaw-*'       │
+      │  Docs:      /opt/orclaw/docs/                 │
+      ╰───────────────────────────────────────────────╯
+
+# -----------------------------------------------------------------------------
+# runcmd: bootstrap orclaw
+# -----------------------------------------------------------------------------
+runcmd:
+  # Fix the secrets.env ownership once the orclaw user exists.
+  - bash -c "useradd --system --create-home --shell /bin/bash --user-group orclaw 2>/dev/null || true"
+  - chown root:orclaw /etc/orclaw/secrets.env
+  - chmod 0640 /etc/orclaw/secrets.env
+
+  # Hand off to the installer, non-interactive.
+  - bash -c "curl -fsSL https://raw.githubusercontent.com/REPLACE_WITH_GITHUB_USERNAME/orclaw/main/install.sh | bash -s -- --non-interactive 2>&1 | tee /var/log/orclaw-install.log"
+
+  # Tell systemd we're ready for normal operation.
+  - systemctl --no-block restart 'orclaw-*.timer' 'orclaw-*.service' || true
+
+# -----------------------------------------------------------------------------
+# Tell the user when we're done.
+# -----------------------------------------------------------------------------
+final_message: |
+  Orclaw VM bootstrap finished in $UPTIME seconds.
+  Tail the install log: ssh ubuntu@<this-ip> sudo cat /var/log/orclaw-install.log
+  Dashboard:            http://127.0.0.1:8766 (front with cloudflared)

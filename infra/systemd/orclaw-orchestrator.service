@@ -1,0 +1,28 @@
+[Unit]
+Description=Orclaw — orchestrator tick (oneshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=engine
+Group=engine
+WorkingDirectory=/opt/orclaw
+EnvironmentFile=/etc/orclaw/secrets.env
+Environment="PYTHONUNBUFFERED=1"
+# One tick = one process. Pollback → reviewer pass → implementer pass.
+# Telegram/Healthchecks hooks fire inside the CLI.
+ExecStart=/opt/orclaw/.venv/bin/orclaw orchestrator tick --apply
+StandardOutput=journal
+StandardError=journal
+
+# A single tick should never take long; cap it so a hung GitHub call
+# doesn't pin the next timer firing.
+TimeoutStartSec=300
+
+# Hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/orclaw /tmp
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true

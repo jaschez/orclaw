@@ -1,0 +1,47 @@
+name: Auto-deploy
+
+# Every push to main triggers a deploy on the Oracle Cloud VM.
+# Latency: typically 10-30 seconds from push to deployed.
+#
+# The job runs on our self-hosted runner (same VM where the engine
+# lives), and invokes /opt/orclaw/infra/scripts/orclaw-deploy.sh
+# via sudo. The script does git pull + pip install + systemctl restart
+# + doctor check + (on failure) rollback.
+#
+# Concurrency=auto-deploy ensures we never run two deploys in parallel —
+# pushes that arrive mid-deploy queue and run sequentially.
+
+on:
+  push:
+    branches: [main]
+  # Manual trigger from GitHub UI (Actions tab → Run workflow). Handy
+  # when the runner went offline and missed a push.
+  workflow_dispatch:
+
+concurrency:
+  group: auto-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    # We force self-hosted here (not the vars.ORCLAW_RUNNER fallback used
+    # by ci.yml) — deploying to GitHub-hosted runners would be meaningless,
+    # we need the script to land on the Oracle VM.
+    runs-on: [self-hosted, oracle, orclaw]
+    timeout-minutes: 8
+
+    steps:
+      - name: Show pushed SHA
+        run: |
+          echo "Triggered by ${GITHUB_EVENT_NAME}"
+          echo "Pushing SHA: ${GITHUB_SHA}"
+          echo "Branch: ${GITHUB_REF_NAME}"
+
+      - name: Run deploy script
+        # The script handles git pull on its own (the runner doesn't need
+        # actions/checkout — the deploy script fetches as the engine user).
+        # Sudoers grants github-runner NOPASSWD just for this exact path.
+        run: sudo /opt/orclaw/infra/scripts/orclaw-deploy.sh

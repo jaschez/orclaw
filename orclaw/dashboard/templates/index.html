@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>orclaw — dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/dashboard.css?v={{ asset_version }}">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2300ff88'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-dot"></span>
+    <span class="brand-name">orclaw<span class="brand-name-accent">engine</span></span>
+  </div>
+  <button class="nav-toggle" id="nav-toggle" aria-label="toggle navigation" aria-expanded="false">
+    <span class="nav-toggle-bar"></span>
+    <span class="nav-toggle-bar"></span>
+    <span class="nav-toggle-bar"></span>
+  </button>
+  <nav class="nav" id="nav">
+    <a href="#status" class="active">status</a>
+    <a href="#orchestration">orchestration</a>
+    <a href="#tuning">tuning</a>
+    <a href="#batches">batches</a>
+    <a href="#runs">runs</a>
+    <a href="#events">events</a>
+    <a href="#controls">controls</a>
+    <a href="#prompts">prompts</a>
+    <a href="#timers">timers</a>
+    <a href="#config">config</a>
+  </nav>
+  <div class="topbar-right">
+    <span id="last-refresh" class="muted">—</span>
+  </div>
+</header>
+
+<main class="main">
+
+  <!-- STATUS -->
+  <section id="status" class="grid grid-3">
+    <article class="card card-status">
+      <h3 class="card-title">state</h3>
+      <div class="big-stat" id="status-paused">—</div>
+      <div class="card-meta">repo · <span id="status-repo">—</span></div>
+    </article>
+
+    <article class="card card-status">
+      <h3 class="card-title">in flight</h3>
+      <div class="big-stat" id="status-inflight">—<span class="big-stat-suffix">/<span id="status-cap">—</span></span></div>
+      <div class="card-meta">concurrency cap</div>
+    </article>
+
+    <article class="card card-status">
+      <h3 class="card-title">batches</h3>
+      <div class="kv-list" id="status-batches"></div>
+    </article>
+  </section>
+
+  <!-- ORCHESTRATION (layered plan + next tick preview) -->
+  <section id="orchestration" class="section">
+    <div class="section-head">
+      <h2>orchestration</h2>
+      <span class="muted">layered plan · order inside each layer = priority · refreshed every 5s</span>
+    </div>
+
+    <!-- Concurrency bar -->
+    <article class="card">
+      <div class="concurrency-row">
+        <div>
+          <div class="card-meta">concurrency</div>
+          <div class="medium-stat"><span id="conc-inflight">—</span><span class="big-stat-suffix">/<span id="conc-cap">—</span></span></div>
+        </div>
+        <div class="concurrency-bar-wrap">
+          <div class="concurrency-bar" id="conc-bar"></div>
+        </div>
+        <div>
+          <div class="card-meta">remaining slots</div>
+          <div class="medium-stat" id="conc-remaining">—</div>
+        </div>
+        <div>
+          <div class="card-meta">active layer</div>
+          <div class="medium-stat" id="conc-active-layer">—</div>
+        </div>
+        <div>
+          <div class="card-meta">paused</div>
+          <div class="medium-stat" id="conc-paused">—</div>
+        </div>
+      </div>
+    </article>
+
+    <!-- Next-tick decision -->
+    <article class="card">
+      <div class="decision-grid">
+        <div>
+          <div class="card-meta">next verdict</div>
+          <div class="medium-stat" id="decision-verdict">—</div>
+        </div>
+        <div>
+          <div class="card-meta">would dispatch</div>
+          <div class="medium-stat" id="decision-issues">—</div>
+        </div>
+        <div>
+          <div class="card-meta">PRs awaiting review</div>
+          <div class="medium-stat" id="decision-prs">—</div>
+        </div>
+      </div>
+      <div class="decision-reason" id="decision-reason">—</div>
+    </article>
+
+    <!-- Layered plan visualization -->
+    <article class="card">
+      <div class="card-meta">layered plan — top to bottom = execution order · within layer = priority order · ▶ = next to be picked</div>
+      <div id="plan-layers" class="plan-layers"></div>
+    </article>
+  </section>
+
+  <!-- TUNING (cap override + quota gauge) -->
+  <section id="tuning" class="section">
+    <div class="section-head">
+      <h2>tuning</h2>
+      <span class="muted">runtime knobs · no redeploy needed for the cap · refreshed every 10s</span>
+    </div>
+
+    <div class="grid grid-2">
+      <!-- Concurrency cap editor -->
+      <article class="card">
+        <h3 class="card-title">concurrency cap</h3>
+        <div class="tuning-row">
+          <div>
+            <div class="card-meta">effective</div>
+            <div class="medium-stat" id="cap-effective">—</div>
+          </div>
+          <div>
+            <div class="card-meta">default (config)</div>
+            <div class="medium-stat muted" id="cap-default">—</div>
+          </div>
+          <div>
+            <div class="card-meta">override</div>
+            <div class="medium-stat" id="cap-override">—</div>
+          </div>
+        </div>
+        <div class="tuning-row">
+          <label>
+            new cap
+            <input id="cap-input" type="number" min="0" max="50" step="1">
+          </label>
+          <button class="btn btn-accent" id="cap-save">apply override</button>
+          <button class="btn" id="cap-clear">clear → use config</button>
+        </div>
+        <div id="cap-result" class="muted small"></div>
+        <div class="card-meta tuning-hint">
+          0 = soft pause. Survives restarts (stored in engine_state).
+          Takes effect on the next orchestrator tick (≤ 30s).
+        </div>
+      </article>
+
+      <!-- Quota estimate -->
+      <article class="card">
+        <h3 class="card-title">pro-plan 5h budget</h3>
+        <div class="tuning-row">
+          <div>
+            <div class="card-meta">dispatches in last 5h</div>
+            <div class="medium-stat" id="quota-used">—</div>
+          </div>
+          <div>
+            <div class="card-meta">budget</div>
+            <div class="medium-stat muted" id="quota-budget">—</div>
+          </div>
+          <div>
+            <div class="card-meta">% used (lower bound)</div>
+            <div class="medium-stat" id="quota-pct">—</div>
+          </div>
+        </div>
+        <div class="quota-bar-wrap">
+          <div class="quota-bar" id="quota-bar"></div>
+        </div>
+        <div class="card-meta tuning-hint">
+          Counts implementer + reviewer dispatches only. Specialist chat from
+          claude.ai is invisible to the engine — actual usage may be higher.
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- BATCHES -->
+  <section id="batches" class="section">
+    <div class="section-head">
+      <h2>batches</h2>
+      <div class="filters">
+        <label>status
+          <select id="batches-filter-status">
+            <option value="">all</option>
+            <option value="pending">pending</option>
+            <option value="in_progress">in_progress</option>
+            <option value="merged">merged</option>
+            <option value="failed">failed</option>
+            <option value="skipped">skipped</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table id="batches-table">
+        <thead><tr><th>layer</th><th>issue</th><th>status</th><th>impl run</th><th>pr</th><th>updated</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- RUNS -->
+  <section id="runs" class="section">
+    <div class="section-head">
+      <h2>runs</h2>
+      <div class="filters">
+        <label>agent
+          <select id="runs-filter-agent">
+            <option value="">all</option>
+            <option value="implementer">implementer</option>
+            <option value="reviewer">reviewer</option>
+            <option value="batch_planner">batch_planner</option>
+            <option value="specialist">specialist</option>
+          </select>
+        </label>
+        <label>status
+          <select id="runs-filter-status">
+            <option value="">all</option>
+            <option value="queued">queued</option>
+            <option value="running">running</option>
+            <option value="success">success</option>
+            <option value="failed">failed</option>
+            <option value="aborted">aborted</option>
+            <option value="timeout">timeout</option>
+            <option value="rate_limited">rate_limited</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table id="runs-table">
+        <thead><tr><th>id</th><th>agent</th><th>status</th><th>issue</th><th>pr</th><th>started</th><th>finished</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- EVENTS -->
+  <section id="events" class="section">
+    <div class="section-head">
+      <h2>events</h2>
+      <div class="filters">
+        <label>minutes
+          <input id="events-filter-minutes" type="number" min="1" max="10080" value="60">
+        </label>
+        <label>level
+          <select id="events-filter-level">
+            <option value="">all</option>
+            <option value="info">info</option>
+            <option value="warning">warning</option>
+            <option value="error">error</option>
+            <option value="critical">critical</option>
+          </select>
+        </label>
+        <label>pattern
+          <input id="events-filter-pattern" type="text" placeholder="%dispatch%">
+        </label>
+        <label>limit
+          <input id="events-filter-limit" type="number" min="1" max="500" value="10">
+        </label>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table id="events-table">
+        <thead><tr><th>ts</th><th>level</th><th>event</th><th>attrs</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- CONTROLS -->
+  <section id="controls" class="section">
+    <div class="section-head"><h2>controls</h2></div>
+    <article class="card">
+      <p class="card-meta">Every action below is logged to the events table and pings Telegram. Use deliberately.</p>
+      <div class="control-row">
+        <button class="btn" data-action="pause">pause</button>
+        <button class="btn" data-action="resume">resume</button>
+        <button class="btn btn-accent" data-action="force_tick">force tick now</button>
+        <button class="btn" data-action="run_planner">run planner</button>
+      </div>
+      <div class="control-row">
+        <label>skip issue #
+          <input id="skip-issue-num" type="number" min="1">
+          <button class="btn" data-action="skip_issue">apply</button>
+        </label>
+        <label>force re-review PR #
+          <input id="force-review-num" type="number" min="1">
+          <button class="btn" data-action="force_review">apply</button>
+        </label>
+        <label>human-review PR #
+          <input id="human-review-num" type="number" min="1">
+          <button class="btn" data-action="require_human_review">apply</button>
+        </label>
+      </div>
+      <div id="control-result" class="muted small"></div>
+    </article>
+  </section>
+
+  <!-- PROMPTS (overlay-backed, no PR) -->
+  <section id="prompts" class="section">
+    <div class="section-head">
+      <h2>prompts</h2>
+      <span class="muted">saved changes take effect on the next orchestrator tick · revert to restore default</span>
+    </div>
+    <div class="prompts-layout">
+      <aside class="prompts-list" id="prompts-list"></aside>
+      <article class="card prompts-editor">
+        <div class="prompts-editor-head">
+          <span id="prompt-current">(none selected)</span>
+          <div class="editor-actions">
+            <button class="btn" id="prompt-revert" disabled title="Revert to shipped default">revert</button>
+            <button class="btn btn-accent" id="prompt-save" disabled>save</button>
+          </div>
+        </div>
+        <textarea id="prompt-content" spellcheck="false" placeholder="select a prompt on the left to view/edit"></textarea>
+        <div id="prompt-result" class="muted small"></div>
+      </article>
+    </div>
+  </section>
+
+  <!-- TIMERS / SERVICES (overlay-backed, no PR) -->
+  <section id="timers" class="section">
+    <div class="section-head">
+      <h2>timers &amp; services</h2>
+      <span class="muted">saved changes apply directly to systemd · git defaults preserved</span>
+    </div>
+    <div class="prompts-layout">
+      <aside class="prompts-list">
+        <button class="btn btn-accent" id="timer-new" style="margin-bottom:8px">+ new unit</button>
+        <div id="timers-list"></div>
+      </aside>
+      <article class="card prompts-editor">
+        <div class="prompts-editor-head">
+          <span id="timer-current">(none selected)</span>
+          <div class="editor-actions">
+            <button class="btn" id="timer-revert" disabled title="Revert/delete this unit">revert/delete</button>
+            <button class="btn btn-accent" id="timer-save" disabled>save &amp; apply</button>
+          </div>
+        </div>
+        <textarea id="timer-content" spellcheck="false" placeholder="select a unit on the left to view/edit"></textarea>
+        <div id="timer-result" class="muted small"></div>
+      </article>
+    </div>
+  </section>
+
+  <!-- CONFIG (read-only) -->
+  <section id="config" class="section">
+    <div class="section-head"><h2>config</h2><span class="muted">read-only · edit via SSH</span></div>
+    <article class="card"><pre id="config-dump" class="mono"></pre></article>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <span class="muted">orclaw · dashboard · read+write · cloudflare access protected</span>
+</footer>
+
+<script src="/static/dashboard.js?v={{ asset_version }}" defer></script>
+</body>
+</html>

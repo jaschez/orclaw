@@ -1,0 +1,26 @@
+[Unit]
+Description=Orclaw — daily summary digest (Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=engine
+Group=engine
+WorkingDirectory=/opt/orclaw
+EnvironmentFile=/etc/orclaw/secrets.env
+Environment="PYTHONUNBUFFERED=1"
+# The summary command is a no-op when Telegram isn't configured, so
+# enabling this on a fresh box is safe.
+ExecStart=/opt/orclaw/.venv/bin/orclaw summary daily
+StandardOutput=journal
+StandardError=journal
+
+TimeoutStartSec=120
+
+# Hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/orclaw /tmp
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
