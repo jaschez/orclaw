@@ -1,6 +1,6 @@
 <div align="center">
 
-# Orclaw
+# 🐋 Orclaw 🦞
 
 **Multi-agent delegation for solo developers.**
 Ship features in parallel, paid by your Claude Pro subscription — not by API tokens.
