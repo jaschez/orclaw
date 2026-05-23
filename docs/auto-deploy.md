@@ -134,7 +134,7 @@ Example session from your phone:
 >   2. Calls `propose_engine_change(branch='chore/raise-cap-to-3', files={'orclaw/config.py': '<new content>'}, commit_message='chore(config): raise max_in_flight to 3', pr_title='chore(config): raise max_in_flight to 3', pr_body='User request from chat')`
 >   3. Replies: "Opened PR #42 — github.com/.../pull/42. Review and let me know if you want me to merge it."
 >
-> **You**: Mergéalo.
+> **You**: Merge it.
 >
 > **Claude**:
 >   1. Calls `merge_engine_pr(42, confirm=True)`

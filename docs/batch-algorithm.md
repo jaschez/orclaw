@@ -1,21 +1,25 @@
-# Batch algorithm — cómo se forman los lotes paralelos
+# Batch algorithm — how parallel batches are formed
 
-## Objetivo
+## Goal
 
-Dado un conjunto de issues con dependencias declaradas en sus bodies (`Blocked by #N`), producir una secuencia de **batches**:
+Given a set of issues with dependencies declared in their bodies
+(`Blocked by #N`), produce a sequence of **batches**:
 
-- **Dentro** de un batch: issues completamente independientes entre sí → paralelas
-- **Entre** batches: secuenciales (batch K+1 espera a que TODOS los issues de batch K estén mergeados)
+- **Inside** a batch: issues that are fully independent → parallel.
+- **Across** batches: sequential (batch K+1 waits for ALL of batch K's
+  issues to be merged).
 
-Esto es exactamente lo que pediste: lotes paralelos sin interdependencia, secuenciales entre lotes.
+This is exactly the model: parallel batches with no internal
+dependencies, sequential across batches.
 
-## Definiciones
+## Definitions
 
-- **Issue abierta no-OPS**: tiene state=OPEN y NO tiene label `ops`
-- **Dep abierta**: una "Blocked by #N" donde la issue #N está en state=OPEN
-- **Layer (Kahn)**: la profundidad mínima en el grafo de dependencias
+- **Open non-OPS issue**: `state=OPEN` and does NOT carry the `ops`
+  label.
+- **Open dep**: a `Blocked by #N` where issue #N is `state=OPEN`.
+- **Layer (Kahn)**: minimum depth in the dependency graph.
 
-## Algoritmo
+## Algorithm
 
 ```python
 def compute_batches(issues: list[Issue]) -> list[list[Issue]]:
@@ -74,9 +78,10 @@ def parse_blocked_by(body: str) -> set[int]:
     return {int(m) for m in re.findall(r"[Bb]locked by #(\d+)", body or "")}
 ```
 
-## Cómo se ejecuta un batch
+## How a batch is executed
 
-El Orchestrator coge el primer layer no-vacío y NO bloqueado por implementaciones activas:
+The Orchestrator picks the first non-empty layer that is NOT blocked
+by active implementations:
 
 ```python
 def next_executable_batch(layers: list[list[Issue]], state: OrchestratorState) -> list[Issue]:
@@ -88,49 +93,56 @@ def next_executable_batch(layers: list[list[Issue]], state: OrchestratorState) -
         issues_in_progress = state.issues_with_open_pr() | state.issues_with_active_implementer()
         if not any(i.number in issues_in_progress for i in layer):
             # This layer is ready to start
-            cap = budget.current_concurrency_cap()  # 2..5 según quota restante
+            cap = budget.current_concurrency_cap()  # 2..5 depending on remaining quota
             return layer[:cap]
     return []  # All layers fully in progress, just wait
 ```
 
-## Filtros adicionales aplicados al batch elegido
+## Extra filters applied to the chosen batch
 
-Antes de spawnar implementers, el Orchestrator filtra cada issue del batch:
+Before spawning implementers, the Orchestrator filters each issue in
+the batch:
 
-1. **`ops` label** → excluir (OPS son tuyos, no del agente)
-2. **`do-not-implement` label** → excluir (kill switch por-issue)
-3. **PR abierto referenciando la issue (closingIssuesReferences)** → excluir
-4. **`agent:start` label ya presente** → excluir (algún proceso previo la cogió)
-5. **Implementación previa fallida ≥ 3 veces** → excluir + alertar al CEO/CTO
+1. **`ops` label** → exclude (OPS issues are yours, not the agent's).
+2. **`do-not-implement` label** → exclude (per-issue kill switch).
+3. **PR open referencing the issue (closingIssuesReferences)** →
+   exclude.
+4. **`agent:start` label already present** → exclude (a previous
+   process already picked it up).
+5. **Previous implementation failed ≥ 3 times** → exclude + alert the
+   owner.
 
-## Ejemplo trabajado con datos reales
+## Worked example with real data
 
-Estado a 22 may después del cleanup. Issues abiertas no-OPS no-cerradas:
+State after a cleanup. Open non-OPS, non-closed issues:
 
 ```
-#110 [P1] Sentry integration: no deps (todas las "Blocked by" están cerradas)
-#131 [META] Daily tracker: META, no se procesa
+#110 [P1] Sentry integration: no deps (every "Blocked by" is closed)
+#131 [META] Daily tracker: META, not processed
 ```
 
-Como tras la limpieza de hoy quedan pocas, el batch actual es:
+After the cleanup few are left, so the current batch is:
 
 ```
 Layer 0 = [#110]
-Layer 1+ = vacío
+Layer 1+ = empty
 ```
 
-Batch a ejecutar: solo `#110`. El Orchestrator spawna 1 implementer, espera, y cuando termine el array se vacía → engine idle hasta que el Specialist genere issues nuevas.
+Batch to execute: just `#110`. The Orchestrator spawns 1 implementer,
+waits, and once it finishes the array empties → engine idle until the
+Specialist generates new issues.
 
-## Ejemplo más interesante (V1 al principio)
+## A more interesting example (initial V1 state)
 
-Si hubiéramos arrancado la engine al principio del plan V1 con las 29 issues originales:
+Had we booted the engine at the very start of plan V1 with the 29
+original issues:
 
 ```
 Layer 0:  [#88 schema, #107 legal pages, #108 cookie banner, #116 test infra]
-          (4 paralelas, ninguna depende de nada abierto)
+          (4 parallel, none depend on anything open)
 
 Layer 1:  [#89, #91, #95, #98, #109, #112]
-          (todas dependen de #88 y/o #107 que están en layer 0)
+          (all depend on #88 and/or #107, which are in layer 0)
 
 Layer 2:  [#90, #92, #94, #96, #97, #99, #100, #111, #113, #114]
 
@@ -138,25 +150,28 @@ Layer 3:  [#93, #101, #102, #103, #104, #106]
 
 Layer 4:  [#105, #115]
 
-Layer 5+: ya cerradas o vacías
+Layer 5+: already closed or empty
 ```
 
-Con concurrency cap de 5 (presupuesto generoso), cada layer toma ≈ tiempo del implementer más lento (~20 min) más review. ~30-40 min por layer. 5 layers = 2-3 h reales para todo V1, si Claude no falla y no hay conflictos.
+With a concurrency cap of 5 (generous budget), each layer takes ≈ the
+time of the slowest implementer (~20 min) plus review. ~30-40 min per
+layer. 5 layers = 2-3h real time for all of V1, assuming Claude
+doesn't fail and there are no conflicts.
 
-Con cap de 2 (presupuesto justo), ~5-6 h reales.
+With a cap of 2 (tight budget), ~5-6h real time.
 
-## Triggers del Batch Planner
+## Batch Planner triggers
 
-El planner re-corre el algoritmo cuando:
+The planner re-runs the algorithm when:
 
-| Evento | Latencia |
+| Event | Latency |
 |---|---|
-| Cron systemd timer (`orclaw-batch-planner.timer`) | Cada 10 min |
-| Webhook GH `issues.closed` o `pull_request.closed.merged` | < 30 s |
-| Manual: `orclaw batch-planner run` | inmediato |
-| Tras un `claim_batch` del Orchestrator | inmediato |
+| Systemd cron timer (`orclaw-batch-planner.timer`) | Every 10 min |
+| GH webhook `issues.closed` or `pull_request.closed.merged` | < 30s |
+| Manual: `orclaw batch-planner run` | immediate |
+| After a `claim_batch` from the Orchestrator | immediate |
 
-## Persistencia del estado del planner
+## Planner state persistence
 
 SQLite `engine.db`:
 
@@ -178,28 +193,39 @@ CREATE UNIQUE INDEX idx_batches_issue ON batches(issue_number) WHERE status != '
 ```
 
 `status` lifecycle:
-- `pending` — calculado por planner, esperando que el orchestrator lo coja
-- `in_progress` — orchestrator spawneó el implementer
-- `merged` — PR se mergeó, issue cerrada
-- `failed` — implementer falló 3 veces, requiere revisión humana
-- `skipped` — la issue fue cerrada externamente sin nuestro PR
+- `pending` — computed by the planner, waiting for the orchestrator to
+  pick it up.
+- `in_progress` — orchestrator spawned the implementer.
+- `merged` — PR merged, issue closed.
+- `failed` — implementer failed 3 times, requires human review.
+- `skipped` — the issue was closed externally without our PR.
 
-El orchestrator solo avanza al layer K+1 cuando TODAS las issues del layer K están en `merged | skipped | failed`. (`failed` no bloquea — se reporta y se sigue.)
+The orchestrator only advances to layer K+1 when ALL issues in layer K
+are in `merged | skipped | failed`. (`failed` doesn't block — it's
+reported and the loop continues.)
 
-## Edge cases manejados
+## Edge cases handled
 
-- **Issue cambia de deps mientras está en cola**: el planner recalcula en cada run. Si las deps de una issue ya en `pending` cambian, se reasigna a otro layer.
-- **Issue se cierra a mano (humano) mientras está `in_progress`**: el orchestrator cancela el implementer en su próximo health check, marca status `skipped`.
-- **Dep cycle accidental** (A blocked by B, B blocked by A): el planner detecta y bloquea todo el ciclo, abre una issue interna `engine:dep-cycle-detected` con los IDs implicados.
-- **Issue OPS marcada por error como agent:ready**: el planner SIEMPRE excluye `ops`, label superior. Si quieres que un OPS sea automatizable, primero le quitas el label `ops`.
+- **Issue's deps change while it's queued**: the planner recomputes on
+  every run. If a `pending` issue's deps change, it's reassigned to a
+  different layer.
+- **Issue closed manually (human) while `in_progress`**: the
+  orchestrator cancels the implementer at its next health check,
+  marks status `skipped`.
+- **Accidental dep cycle** (A blocked by B, B blocked by A): the
+  planner detects + blocks the whole cycle, opens an internal issue
+  `engine:dep-cycle-detected` with the involved IDs.
+- **OPS issue mistakenly marked `agent:ready`**: the planner ALWAYS
+  excludes `ops` — top-priority filter. To make an OPS issue
+  automatable, remove the `ops` label first.
 
-## Métricas del planner
+## Planner metrics
 
-Cada run del planner emite a `engine.db.metrics`:
+Each planner run emits to `engine.db.metrics`:
 
-- Número de layers totales calculados
-- Número de issues en current_batch
-- Tiempo de cálculo (debería ser sub-segundo para <500 issues)
-- Issues "huérfanas" detectadas (sin labels esperados, sin deps parseables)
+- Total number of layers computed.
+- Number of issues in `current_batch`.
+- Compute time (should be sub-second for <500 issues).
+- "Orphan" issues detected (no expected labels, no parseable deps).
 
-Visible en el dashboard en `/status/planner`.
+Visible on the dashboard at `/status/planner`.

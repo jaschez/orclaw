@@ -89,14 +89,14 @@ spot too — by default tools read from `/var/lib/orclaw/data`.
 ### 3. Restart Claude Code and try it
 
 ```
-You: ¿cómo va el motor?
-Claude: [calls get_status] El motor está activo, sin pausa, con 0 runs
-        en vuelo. Hay 5 batches pendientes en el layer 0 y 12 ya merged.
+You: how's the engine doing?
+Claude: [calls get_status] The engine is active, not paused, with 0 runs
+        in flight. 5 batches pending in layer 0 and 12 already merged.
 ```
 
 ---
 
-## Remote mode (móvil / claude.ai / cualquier Claude Code)
+## Remote mode (mobile / claude.ai / any Claude Code instance)
 
 For operating the engine from your phone or a laptop that isn't the
 engine host. Two pieces:

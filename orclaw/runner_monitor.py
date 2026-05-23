@@ -241,8 +241,8 @@ async def check_runner_health(
                 "<b>🟢 Self-hosted runner UP</b>\n\n"
                 f"Unit: <code>{unit}</code>\n"
                 f"ORCLAW_RUNNER: <code>{desired_var}</code>\n"
-                "Workflows que usen <code>vars.ORCLAW_RUNNER</code> volverán "
-                "a la VM en el próximo firing.",
+                "Workflows that use <code>vars.ORCLAW_RUNNER</code> will run "
+                "on this VM again at the next firing.",
                 parse_mode="HTML",
             )
         else:
@@ -251,8 +251,8 @@ async def check_runner_health(
                 "<b>🔴 Self-hosted runner DOWN</b>\n\n"
                 f"Unit: <code>{unit}</code>\n"
                 f"ORCLAW_RUNNER flipped to: <code>{desired_var}</code>\n\n"
-                "Próximos workflows correrán en GitHub-hosted hasta que "
-                "vuelva. Investigar con: <code>systemctl status "
+                "Upcoming workflows will fall back to GitHub-hosted runners "
+                "until it returns. Investigate with: <code>systemctl status "
                 f"{unit}</code>",
                 parse_mode="HTML",
             )

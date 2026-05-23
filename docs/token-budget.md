@@ -1,32 +1,39 @@
-# Cuota Pro plan — estrategia de observación y control
+# Pro-plan quota — observation and control strategy
 
-> **Decisión de auth**: Cero API key de Anthropic. Todo Claude vía `@claude` en GitHub Actions consumiendo el plan Pro vía OAuth. Ver `pro-plan-strategy.md`.
+> **Auth decision**: zero Anthropic API key. All Claude calls go
+> through `@claude` mentions in GitHub Actions, consuming the Pro plan
+> via OAuth. See [`pro-plan-strategy.md`](pro-plan-strategy.md).
 
-## Realidad de la cuota
+## Quota reality
 
-- Plan Pro: ~225 mensajes / 5 h rolling window (no documentado público exacto; usamos esta estimación)
-- Compartido entre: uso interactivo del CEO/CTO + todas las acciones de la engine (specialist, implementer, reviewer)
-- Sin API para consultar % restante en tiempo real
-- Cuando se satura, Claude devuelve 429 / auth error → claude.yml falla con conclusion `failure`
+- Pro plan: ~225 messages / 5h rolling window (not publicly documented
+  exactly; this is our working estimate).
+- Shared across: the owner's interactive use + every engine action
+  (specialist, implementer, reviewer).
+- No API to query remaining % in real time.
+- When saturated, Claude returns 429 / auth error → `claude.yml` fails
+  with conclusion `failure`.
 
-## Lo que NO tracking
+## What we do NOT track
 
-- ❌ Tokens input/output (Anthropic no lo expone para Pro)
-- ❌ Coste en USD/EUR (no hay factura, no aplica)
-- ❌ Cache hit ratio (no medible desde nuestro lado)
+- ❌ Input/output tokens (Anthropic doesn't expose them for Pro).
+- ❌ USD/EUR cost (no invoice, n/a).
+- ❌ Cache hit ratio (not measurable from our side).
 
-## Lo que SÍ medimos (proxies)
+## What we DO measure (proxies)
 
-- ✅ **Número de workflow runs de claude.yml** por hora / día / 5h window
-- ✅ **Duración de cada run** (latencia alta = backend saturado)
-- ✅ **Conclusion de cada run** (success / failure / cancelled / skipped)
-- ✅ **Frecuencia de auth errors** (proxy directo de saturación)
-- ✅ **PRs abiertos por minuto** (output efectivo del sistema)
+- ✅ **Number of `claude.yml` workflow runs** per hour / day / 5h
+  window.
+- ✅ **Duration of each run** (high latency = saturated backend).
+- ✅ **Conclusion of each run** (success / failure / cancelled /
+  skipped).
+- ✅ **Frequency of auth errors** (direct saturation proxy).
+- ✅ **PRs opened per minute** (the system's effective output).
 
-## Tabla `runs` en SQLite
+## `runs` table in SQLite
 
 ```sql
--- ya definida en orchestrator/state/schema.sql
+-- defined in orchestrator/state/schema.sql
 runs (
   id TEXT PRIMARY KEY,
   agent TEXT,            -- 'specialist' | 'implementer' | 'reviewer'
@@ -36,36 +43,38 @@ runs (
   started_at TEXT,
   finished_at TEXT,
   duration_seconds INTEGER,
-  workflow_run_id INTEGER,  -- GH Actions run ID para correlate
+  workflow_run_id INTEGER,  -- GH Actions run ID for correlation
   notes TEXT
 )
 ```
 
-Cada `@claude` mention que la engine postea queda registrada al postear (status `queued`), se actualiza tras observar el workflow run correspondiente.
+Every `@claude` mention the engine posts is recorded at post time
+(status `queued`) and updated after the matching workflow run is
+observed.
 
-## Concurrencia
+## Concurrency
 
 ```toml
 # config/concurrency.toml
 [concurrency]
-max_in_flight = 2          # nunca más de 2 @claude mentions simultáneas vivas
-default_in_flight = 1      # sequential por defecto, burst a 2 solo si quota healthy
+max_in_flight = 2          # never more than 2 live @claude mentions at once
+default_in_flight = 1      # sequential by default, burst to 2 only when quota is healthy
 
 [backoff]
-# Si detectamos 2 failures con auth error en últimos 10 min → asumimos saturación
+# If we see 2 failures with auth errors in the last 10 min → assume saturation
 saturation_threshold_failures = 2
 saturation_window_minutes = 10
-saturation_cooldown_minutes = 30        # tras detectar saturación, esperar este tiempo
+saturation_cooldown_minutes = 30        # after detecting saturation, wait this long
 
-# Si una acción individual falla, retry exponencial
+# If a single action fails, exponential retry
 retry_initial_seconds = 60
 retry_max_attempts = 3
 retry_max_total_minutes = 30
 ```
 
-## Cómo el orchestrator regula el ritmo
+## How the orchestrator paces itself
 
-Pseudocódigo:
+Pseudocode:
 
 ```python
 async def orchestrator_loop():
@@ -84,12 +93,12 @@ async def orchestrator_loop():
             await sleep(60)  # nothing to do
             continue
 
-        # Post @claude mention for next issue
+        # Post @claude mention for the next issue
         issue = batch.next()
         await post_comment(issue, build_implementer_prompt(issue))
         record_run(issue, status='queued')
 
-        # Wait a bit before posting next, even if cap allows it
+        # Wait a bit before posting the next, even if the cap allows it
         # (gives claude.yml time to start without flooding GH webhooks)
         await sleep(30)
 
@@ -100,13 +109,13 @@ def is_saturated() -> bool:
 
 
 def active_in_flight_count() -> int:
-    # Issues with agent:start label AND no merged PR yet
+    # Issues with the agent:start label AND no merged PR yet
     return db.count_active_runs(status_in=['queued', 'running'])
 ```
 
 ## Dashboard `/status/quota`
 
-Lo que muestra:
+What it shows:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -133,44 +142,51 @@ Lo que muestra:
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Detección de patrones anómalos
+## Anomaly detection
 
-El orchestrator alerta si:
+The orchestrator alerts if:
 
-- **>10 failures en 1h** → algo está mal (auth roto? token expiró?)
-- **0 success en 4h con mentions activas** → engine atascada
-- **>200 mentions en 5h** → sospecha de loop, pausa automática
+- **>10 failures in 1h** → something is wrong (auth broken? token
+  expired?).
+- **0 successes in 4h with active mentions** → engine stuck.
+- **>200 mentions in 5h** → suspected loop, auto-pause.
 
-## Acciones manuales para el CEO/CTO
+## Manual actions for the owner
 
 ```bash
-# Ver quota observation
+# Show quota observation
 orclaw quota show
 
-# Forzar pausa del orchestrator
+# Force-pause the orchestrator
 orclaw pause
 
-# Reanudar
+# Resume
 orclaw resume
 
-# Ver runs recientes
+# List recent runs
 orclaw runs list --limit 20
 
-# Forzar análisis de saturación ahora
+# Force a saturation analysis now
 orclaw quota check
 ```
 
-## Trade-off honesto
+## Honest trade-off
 
-Este modelo **NO da paralelismo masivo**. Si Pro plan se vuelve cuello de botella crítico (queremos 10x velocidad), la única salida es:
+This model **does NOT give massive parallelism**. If the Pro plan
+becomes a critical bottleneck (you want 10× more throughput), the only
+escape hatches are:
 
-1. Migrar implementer + reviewer a API key (~50-100 €/mes)
-2. Mantener specialist en Pro (sigue siendo cómodo)
+1. Migrate implementer + reviewer to an API key (~$50-100/month).
+2. Keep the specialist on Pro (still convenient).
 
-La engine está diseñada para que este switch sea **un cambio de config**, no un rewrite. Los prompts viven en `prompts/`, los modelos en `config/`. Si quisieras migrar, solo cambias:
+The engine is designed so that switch is a **config change**, not a
+rewrite. Prompts live in `prompts/`, models in `config/`. To migrate
+you'd just:
 
-- `config/auth.toml`: añadir `anthropic_api_key_env = "ANTHROPIC_API_KEY"`
-- Orchestrator detecta la API key y usa SDK directo en vez de postear `@claude`
-- Resto del flujo es idéntico
+- `config/auth.toml`: add `anthropic_api_key_env = "ANTHROPIC_API_KEY"`.
+- Orchestrator detects the API key and uses the SDK directly instead
+  of posting `@claude`.
+- The rest of the flow is identical.
 
-Pero **mientras no haya señal clara de cuello de botella**, Pro plan + impersonación es lo correcto.
+But **as long as there's no clear bottleneck signal**, Pro plan +
+impersonation is the right call.

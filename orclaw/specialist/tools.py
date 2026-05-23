@@ -645,7 +645,7 @@ async def view_engine_pr(pr_number: int) -> str:
     """Show diff summary + status for a orclaw PR.
 
     Use this when the user wants to inspect a PR before merging
-    ("muéstrame el #17", "qué cambia ese PR?"). Returns the title, body,
+    ("show me #17", "what does that PR change?"). Returns the title, body,
     state, mergeable status, plus per-file additions/deletions and a
     truncated patch for each file.
     """
