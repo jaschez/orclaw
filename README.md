@@ -87,42 +87,35 @@ You write issues. Orclaw picks them in dependency order, fires up to **N** Claud
 
 ## How it works
 
-```
-                                 ┌─────────────────────┐
-                                 │   YOUR GITHUB REPO  │
-                                 │  (issues + PRs)     │
-                                 └──────────┬──────────┘
-                                            │ 1. read open issues
-                                            ▼
-   ┌──────────────────────────────────────────────────────────────────┐
-   │                       ORCLAW VM (yours)                          │
-   │                                                                  │
-   │   ┌─────────────┐    ┌──────────────┐    ┌─────────────────┐    │
-   │   │  PLANNER    │───▶│ ORCHESTRATOR │◀───│ POLLBACK        │    │
-   │   │ (every 10m) │    │ (every 30s)  │    │ (reads labels)  │    │
-   │   └─────────────┘    └──────┬───────┘    └─────────────────┘    │
-   │                             │ 2. @claude implement #42           │
-   │                             │    @claude review PR #99           │
-   │                             ▼                                    │
-   │   ┌─────────────────────────────────────────────────────────┐    │
-   │   │  GitHub Actions (self-hosted runner on this same VM)    │    │
-   │   │  → claude-code-action picks up the mention              │    │
-   │   │  → runs Claude on your Pro plan                         │    │
-   │   │  → opens / pushes to PR                                 │    │
-   │   └─────────────────────────────────────────────────────────┘    │
-   │                             ▲                                    │
-   │   ┌─────────────────────────┼─────────────────────────────┐      │
-   │   │  Dashboard  +  Telegram bot  +  Specialist MCP server │      │
-   │   │  (talk to the same SQLite + engine state)             │      │
-   │   └───────────────────────────────────────────────────────┘      │
-   └──────────────────────────────────────────────────────────────────┘
-                                            ▲
-                                            │ 3. you watch / steer
-                                            │
-                              ┌─────────────┴─────────────┐
-                              │  browser  /  Telegram  /  │
-                              │  claude.ai mobile (MCP)   │
-                              └───────────────────────────┘
+```mermaid
+flowchart TD
+    classDef gh fill:#1f2328,stroke:#00ff88,stroke-width:2px,color:#f5f5f5
+    classDef engine fill:#111111,stroke:#00ff88,stroke-width:1px,color:#f5f5f5
+    classDef runner fill:#111111,stroke:#00b860,stroke-width:1px,color:#f5f5f5
+    classDef control fill:#111111,stroke:#ffaa00,stroke-width:1px,color:#f5f5f5
+    classDef you fill:#0a0a0a,stroke:#00ff88,stroke-width:2px,color:#00ff88
+
+    GH["<b>YOUR GITHUB REPO</b><br/>issues + PRs"]:::gh
+
+    subgraph VM["ORCLAW VM (yours)"]
+        direction TB
+        Planner["<b>PLANNER</b><br/>every 10m"]:::engine
+        Orchestrator["<b>ORCHESTRATOR</b><br/>every 30s"]:::engine
+        Pollback["<b>POLLBACK</b><br/>reads labels"]:::engine
+        Runner["<b>GitHub Actions runner</b> (self-hosted)<br/>claude-code-action → Claude on your Pro plan<br/>opens / pushes to PR"]:::runner
+        Controls["<b>Dashboard</b> · <b>Telegram bot</b> · <b>Specialist MCP</b><br/>shared SQLite + engine state"]:::control
+    end
+
+    You["<b>browser</b> / <b>Telegram</b> / <b>claude.ai mobile (MCP)</b>"]:::you
+
+    GH -->|"1. read open issues"| Planner
+    Planner --> Orchestrator
+    Pollback --> Orchestrator
+    Orchestrator -->|"2. @claude implement #42<br/>@claude review PR #99"| Runner
+    Runner -->|"label updates"| Pollback
+    Runner --> GH
+    Controls --- Orchestrator
+    You ==>|"3. watch / steer"| Controls
 ```
 
 **The key insight**: GitHub's `@claude` action runs *on your self-hosted runner*, uses *your Pro-plan session*, and reports back via labels and PR state. Orclaw never calls the Anthropic API directly. It just orchestrates **when** and **what** to mention.
