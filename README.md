@@ -89,30 +89,29 @@ You write issues. Orclaw picks them in dependency order, fires up to **N** Claud
 
 ```mermaid
 flowchart TB
-    classDef gh      fill:#1c1c1c,stroke:#00ff88,stroke-width:2px,color:#f5f5f5
-    classDef engine  fill:#0d0d0d,stroke:#00ff88,stroke-width:1.5px,color:#f5f5f5
-    classDef runner  fill:#0d0d0d,stroke:#00b860,stroke-width:1.5px,color:#f5f5f5
+    classDef gh fill:#1c1c1c,stroke:#00ff88,stroke-width:2px,color:#f5f5f5
+    classDef engine fill:#0d0d0d,stroke:#00ff88,stroke-width:1.5px,color:#f5f5f5
+    classDef runner fill:#0d0d0d,stroke:#00b860,stroke-width:1.5px,color:#f5f5f5
     classDef surface fill:#0d0d0d,stroke:#ffaa00,stroke-width:1.5px,color:#f5f5f5
-    classDef you     fill:#001a0d,stroke:#00ff88,stroke-width:2px,color:#00ff88
+    classDef you fill:#001a0d,stroke:#00ff88,stroke-width:2px,color:#00ff88
 
     GH["<b>GitHub repo</b><br/>issues · PRs · labels"]:::gh
 
-    subgraph VM[" <b>Orclaw VM</b> · yours "]
+    subgraph VM["<b>Orclaw VM</b> · yours"]
       direction TB
       Engine["<b>Engine core</b><br/>planner · orchestrator · pollback<br/>shared SQLite"]:::engine
-      Runner["<b>Self-hosted GitHub Actions runner</b><br/>claude-code-action — runs Claude on your <b>Pro plan</b>"]:::runner
+      Runner["<b>Self-hosted GitHub Actions runner</b><br/>claude-code-action runs Claude on your <b>Pro plan</b>"]:::runner
       Surfaces["<b>Dashboard · Telegram bot · Specialist MCP</b>"]:::surface
-
       Engine <-->|"read · write"| Surfaces
     end
 
     You(("you")):::you
 
-    GH      -->|"1 · open issues + PRs"|              Engine
-    Engine  -->|"2 · @claude implement / review"|     GH
-    GH      -.->|"3 · webhook fires claude.yml"|       Runner
-    Runner  -->|"4 · opens PR + writes labels"|        GH
-    You     ==>|"5 · watch / steer"|                   Surfaces
+    GH -->|"1 · open issues and PRs"| Engine
+    Engine -->|"2 · @claude implement / review"| GH
+    GH -.->|"3 · webhook fires claude.yml"| Runner
+    Runner -->|"4 · opens PR, writes labels"| GH
+    You ==>|"5 · watch and steer"| Surfaces
 
     style VM fill:#1a1a1a,stroke:#2a2a2a,stroke-width:1px,color:#707070
 ```
