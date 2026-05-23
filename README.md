@@ -114,7 +114,7 @@ flowchart TB
     Engine -->|"2 · @claude implement / review"| GH
     GH -.->|"3 · webhook fires claude.yml"| Runner
     Runner -->|"4 · opens PR, writes labels"| GH
-    You ==>|"5 · watch and steer"| Surfaces
+    Surfaces ==>|"5 · watch and steer"| You
 
     style VM fill:#1a1a1a,stroke:#2a2a2a,stroke-width:1px,color:#707070
     style Core fill:transparent,stroke:transparent,color:transparent
