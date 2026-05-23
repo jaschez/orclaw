@@ -147,16 +147,32 @@ Total time on a clean VM: **~5 minutes**.
 
 ### Option B — Proxmox cloud-init template
 
-If you run Proxmox (or any cloud-init host), use the canned template:
+If you run [Proxmox VE](https://www.proxmox.com/en/proxmox-virtual-environment/overview)
+(or any cloud-init host), use the canned template. `qm` is Proxmox's
+VM-management CLI; `<VMID>` is the numeric ID Proxmox assigns to each
+VM (e.g. `100`, `101`, `9000` for templates — visible in the web UI or
+via `qm list`).
 
 ```bash
-cd proxmox/
-# Edit user-data.yml with your secrets.
-qm set <VMID> --cicustom "user=local:snippets/orclaw-user-data.yml"
-qm start <VMID>
+# 1. Fill in your SSH key + secrets in the cloud-init file.
+$EDITOR proxmox/user-data.yml
+
+# 2. Make it available to Proxmox as a snippet.
+cp proxmox/user-data.yml /var/lib/vz/snippets/orclaw-user-data.yml
+
+# 3. Clone an Ubuntu 24.04 cloud-init template into a new VM.
+#    9000 = the VMID of YOUR base template (build it once — see the
+#    full guide). 101 = the VMID for the new Orclaw VM (any free ID).
+qm clone 9000 101 --name orclaw-01 --full
+qm set 101 --cicustom "user=local:snippets/orclaw-user-data.yml"
+qm set 101 --ipconfig0 ip=dhcp --ciuser ubuntu
+
+# 4. Boot. The VM autoprovisions in 3–4 minutes.
+qm start 101
 ```
 
-Full guide: [`docs/proxmox-template.md`](docs/proxmox-template.md).
+Full guide (including how to build the base template + non-Proxmox
+hosts like Hetzner / EC2 / GCP): [`proxmox/README.md`](proxmox/README.md).
 
 ### Option C — local dev
 
