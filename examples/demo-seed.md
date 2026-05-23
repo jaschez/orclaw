@@ -15,7 +15,7 @@ screen has something to render.
 
 ```bash
 # 1. Fresh venv (or use the system one if you've installed via the bootstrap).
-git clone https://github.com/${GITHUB_USERNAME}/orclaw.git
+git clone https://github.com/jaschez/orclaw.git
 cd orclaw
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dashboard]'

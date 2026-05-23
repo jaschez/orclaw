@@ -8,7 +8,7 @@ El mecanismo concreto:
 
 1. La engine (server remoto) actúa como dispatcher: decide qué hacer, cuándo, dónde, con qué prompt.
 2. Para cada acción, la engine **postea un comentario en un issue o PR** mencionando `@claude` + las instrucciones.
-3. El comentario aparece como **autoría del CEO/CTO (${GITHUB_USERNAME})** mediante un Personal Access Token con scope `repo`. Esto es legítimo: el CEO/CTO autoriza explícitamente al server a actuar en su nombre dentro de su propio repo privado.
+3. El comentario aparece como **autoría del CEO/CTO (jaschez)** mediante un Personal Access Token con scope `repo`. Esto es legítimo: el CEO/CTO autoriza explícitamente al server a actuar en su nombre dentro de su propio repo privado.
 4. GitHub dispara el workflow `claude.yml` (ya existente).
 5. Claude responde usando el `CLAUDE_CODE_OAUTH_TOKEN`, atado al plan Pro.
 6. Todo el trabajo (implementación, review, planificación de issues) se ejecuta dentro de la cuota Pro, sin coste extra.
@@ -97,7 +97,7 @@ Cuando detectamos saturación:
 
 ## Impersonación: el PAT del CEO/CTO
 
-La engine necesita un PAT clásico de GitHub bajo la cuenta `${GITHUB_USERNAME}` con scopes:
+La engine necesita un PAT clásico de GitHub bajo la cuenta `jaschez` con scopes:
 
 - `repo` (full): para comentar issues/PRs, leer state, aplicar labels
 - `project`: para mover cards en Project V2
@@ -106,7 +106,7 @@ La engine necesita un PAT clásico de GitHub bajo la cuenta `${GITHUB_USERNAME}`
 
 Este PAT lo guardas como `GITHUB_TOKEN` en `/etc/orclaw/secrets.env` del server.
 
-**Riesgo**: si alguien comprometiera el server, podría comentar como `${GITHUB_USERNAME}` y disparar runs de Claude consumiendo la cuota Pro. **Mitigación**:
+**Riesgo**: si alguien comprometiera el server, podría comentar como `jaschez` y disparar runs de Claude consumiendo la cuota Pro. **Mitigación**:
 
 - Server hardenizado (SSH key only, ufw, no root, no password)
 - PAT con expiración explícita (90 días, renovar)

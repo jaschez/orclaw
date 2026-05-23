@@ -79,7 +79,7 @@ runcmd:
   - chmod 0640 /etc/orclaw/secrets.env
 
   # Hand off to the installer, non-interactive.
-  - bash -c "curl -fsSL https://raw.githubusercontent.com/REPLACE_WITH_GITHUB_USERNAME/orclaw/main/install.sh | bash -s -- --non-interactive 2>&1 | tee /var/log/orclaw-install.log"
+  - bash -c "curl -fsSL https://raw.githubusercontent.com/jaschez/orclaw/main/install.sh | bash -s -- --non-interactive 2>&1 | tee /var/log/orclaw-install.log"
 
   # Tell systemd we're ready for normal operation.
   - systemctl --no-block restart 'orclaw-*.timer' 'orclaw-*.service' || true

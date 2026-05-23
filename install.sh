@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Orclaw installer — provisions a fresh Ubuntu 24.04 host end-to-end.
 #
-#   curl -fsSL https://raw.githubusercontent.com/${GITHUB_USERNAME}/orclaw/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/jaschez/orclaw/main/install.sh | bash
 #
 # What it does (idempotent — safe to re-run):
 #   1.  Validates the host (Ubuntu 24.04 LTS, root or sudo).
@@ -38,7 +38,7 @@ ORCLAW_USER="orclaw"
 INSTALL_DIR="/opt/orclaw"
 CONFIG_DIR="/etc/orclaw"
 DATA_DIR="/var/lib/orclaw"
-REPO_URL="https://github.com/${GITHUB_USERNAME}/orclaw.git"
+REPO_URL="https://github.com/jaschez/orclaw.git"
 BRANCH="main"
 INTERACTIVE=1
 INSTALL_SYSTEMD=1

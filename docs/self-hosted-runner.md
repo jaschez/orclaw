@@ -15,7 +15,7 @@ workflows. This document covers:
 | `/home/github-runner/` | `github-runner` | Dedicated user, no sudo |
 | `/home/github-runner/runner/` | `github-runner` | actions-runner binary + config |
 | `/home/github-runner/runner/_work/` | `github-runner` | Where each workflow checks code out |
-| `/etc/systemd/system/actions.runner.${GITHUB_USERNAME}-${TARGET_REPO}.self-hosted-runner-1.service` | root | systemd unit installed by `svc.sh install` |
+| `/etc/systemd/system/actions.runner.jaschez-${TARGET_REPO}.self-hosted-runner-1.service` | root | systemd unit installed by `svc.sh install` |
 | `/etc/orclaw/secrets.env` | `root:engine` mode 640 | **github-runner cannot read this** ✓ |
 
 The runner reports its labels as `[self-hosted, linux, ARM64, oracle, orclaw]`.
@@ -65,7 +65,7 @@ The `orclaw-runner-monitor.timer` (every 2 minutes) does:
    via the GitHub API and fire a Telegram alert.
 3. Scan recent workflow runs (last 10 minutes) for:
    - Runs longer than 15 minutes (`LONG_RUN_THRESHOLD`)
-   - Runs from actors outside `{${GITHUB_USERNAME}, github-actions[bot]}`
+   - Runs from actors outside `{jaschez, github-actions[bot]}`
    - Runs ending in `conclusion: failure`
    Each match → one Telegram alert (de-duped per run ID).
 
@@ -126,9 +126,9 @@ private repo with a trusted contributor set of size 1.
 
 | Action | Command |
 |---|---|
-| Status of the runner | `systemctl status actions.runner.${GITHUB_USERNAME}-${TARGET_REPO}.self-hosted-runner-1` |
-| Tail runner logs | `journalctl -u actions.runner.${GITHUB_USERNAME}-${TARGET_REPO}.self-hosted-runner-1 -f` |
-| Restart the runner | `sudo systemctl restart actions.runner.${GITHUB_USERNAME}-${TARGET_REPO}.self-hosted-runner-1` |
+| Status of the runner | `systemctl status actions.runner.jaschez-${TARGET_REPO}.self-hosted-runner-1` |
+| Tail runner logs | `journalctl -u actions.runner.jaschez-${TARGET_REPO}.self-hosted-runner-1 -f` |
+| Restart the runner | `sudo systemctl restart actions.runner.jaschez-${TARGET_REPO}.self-hosted-runner-1` |
 | Force fallback to GH-hosted | `gh api -X PATCH /repos/${TARGET_REPO}/actions/variables/ORCLAW_RUNNER -f value=ubuntu-latest` |
 | Force back to self-hosted | `gh api -X PATCH /repos/${TARGET_REPO}/actions/variables/ORCLAW_RUNNER -f value=self-hosted` |
 | One-shot monitor pass | `orclaw runner monitor` |

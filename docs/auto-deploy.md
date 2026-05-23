@@ -1,6 +1,6 @@
 # Auto-deploy — push-driven, no polling
 
-Every push to `main` on `${GITHUB_USERNAME}/orclaw` triggers an auto-deploy
+Every push to `main` on `jaschez/orclaw` triggers an auto-deploy
 on the Oracle Cloud VM. Latency: typically 10–30 seconds.
 
 ## How it works
@@ -82,10 +82,10 @@ The same script runs.
 
 ```bash
 # On the VM:
-sudo journalctl -u actions.runner.${GITHUB_USERNAME}-orclaw.self-hosted-runner-1.service -f
+sudo journalctl -u actions.runner.jaschez-orclaw.self-hosted-runner-1.service -f
 ```
 
-OR check the run on https://github.com/${GITHUB_USERNAME}/orclaw/actions
+OR check the run on https://github.com/jaschez/orclaw/actions
 
 OR wait for the Telegram alert ("🚀 Engine auto-deployed ...").
 

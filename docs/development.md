@@ -11,7 +11,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/${GITHUB_USERNAME}/orclaw.git
+git clone https://github.com/jaschez/orclaw.git
 cd orclaw
 
 python3.11 -m venv .venv

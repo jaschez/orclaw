@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/${GITHUB_USERNAME}/orclaw.git}"
+REPO_URL="${REPO_URL:-https://github.com/jaschez/orclaw.git}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/orclaw}"
 DATA_DIR="${DATA_DIR:-/var/lib/orclaw}"
 MIRROR_REPO="${MIRROR_REPO:-https://github.com/${TARGET_REPO}.git}"

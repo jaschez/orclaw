@@ -4,7 +4,7 @@ A thin async wrapper around the GitHub REST + GraphQL APIs using the PAT
 configured in :class:`GitHubSettings`. We deliberately keep this small —
 it covers only the surface the orchestrator actually needs.
 
-The PAT acts on behalf of the CEO/CTO (${GITHUB_USERNAME}) so comments posted via
+The PAT acts on behalf of the CEO/CTO (jaschez) so comments posted via
 :meth:`post_comment` appear as their authorship. This is the
 "impersonation" pattern described in ``docs/pro-plan-strategy.md``.
 """

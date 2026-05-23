@@ -10,7 +10,7 @@ Ship features in parallel, paid by your Claude Pro subscription — not by API t
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)]()
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/${GITHUB_USERNAME}/orclaw/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jaschez/orclaw/main/install.sh | bash
 ```
 
 </div>
@@ -27,7 +27,7 @@ events filter, controls, prompt editor, timers. Reproduce locally in
 under a minute:
 
 ```bash
-git clone https://github.com/${GITHUB_USERNAME}/orclaw.git && cd orclaw
+git clone https://github.com/jaschez/orclaw.git && cd orclaw
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dashboard]'
 export ORCLAW_DATA_DIR=$(mktemp -d) ORCLAW_GITHUB_REPO=example/demo GITHUB_TOKEN=dummy
@@ -132,7 +132,7 @@ You write issues. Orclaw picks them in dependency order, fires up to **N** Claud
 ### Option A — one-line install on a fresh Ubuntu 24.04 VM
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/${GITHUB_USERNAME}/orclaw/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jaschez/orclaw/main/install.sh | bash
 ```
 
 The installer:
@@ -161,7 +161,7 @@ Full guide: [`docs/proxmox-template.md`](docs/proxmox-template.md).
 ### Option C — local dev
 
 ```bash
-git clone https://github.com/${GITHUB_USERNAME}/orclaw.git
+git clone https://github.com/jaschez/orclaw.git
 cd orclaw
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e '.[specialist,dashboard]'
@@ -295,6 +295,6 @@ Built on top of Anthropic's [`claude-code-action`](https://github.com/anthropics
 
 <div align="center">
 
-If Orclaw saves you an afternoon, **a [star](https://github.com/${GITHUB_USERNAME}/orclaw)** is the cheapest way to say thanks.
+If Orclaw saves you an afternoon, **a [star](https://github.com/jaschez/orclaw)** is the cheapest way to say thanks.
 
 </div>

@@ -31,7 +31,7 @@ sudo -u engine -i
 ## 2. Run the provision script
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/${GITHUB_USERNAME}/orclaw/develop/infra/scripts/provision.sh -o /tmp/provision.sh
+curl -fsSL https://raw.githubusercontent.com/jaschez/orclaw/develop/infra/scripts/provision.sh -o /tmp/provision.sh
 bash /tmp/provision.sh
 ```
 

@@ -133,7 +133,7 @@ sudo chown engine:engine /opt/orclaw
 gh auth login --with-token < /path/to/token.txt
 # Alternativa interactiva: gh auth login
 
-git clone https://github.com/${GITHUB_USERNAME}/orclaw.git /opt/orclaw
+git clone https://github.com/jaschez/orclaw.git /opt/orclaw
 cd /opt/orclaw
 python3.11 -m venv .venv
 source .venv/bin/activate

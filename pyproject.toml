@@ -60,8 +60,8 @@ specialist = [
 orclaw = "orclaw.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/${GITHUB_USERNAME}/orclaw"
-Repository = "https://github.com/${GITHUB_USERNAME}/orclaw"
+Homepage = "https://github.com/jaschez/orclaw"
+Repository = "https://github.com/jaschez/orclaw"
 
 [tool.hatch.build.targets.wheel]
 packages = ["orclaw"]
