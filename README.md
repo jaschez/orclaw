@@ -99,8 +99,11 @@ flowchart TB
 
     subgraph VM["<b>Orclaw VM</b> · yours"]
       direction TB
-      Engine["<b>Engine core</b><br/>planner · orchestrator · pollback<br/>shared SQLite"]:::engine
-      Runner["<b>Self-hosted GitHub Actions runner</b><br/>claude-code-action runs Claude on your <b>Pro plan</b>"]:::runner
+      subgraph Core[" "]
+        direction LR
+        Engine["<b>Engine core</b><br/>planner · orchestrator · pollback<br/>shared SQLite"]:::engine
+        Runner["<b>Self-hosted GitHub Actions runner</b><br/>claude-code-action runs Claude on your <b>Pro plan</b>"]:::runner
+      end
       Surfaces["<b>Dashboard · Telegram bot · Specialist MCP</b>"]:::surface
       Engine <-->|"read · write"| Surfaces
     end
@@ -114,6 +117,7 @@ flowchart TB
     You ==>|"5 · watch and steer"| Surfaces
 
     style VM fill:#1a1a1a,stroke:#2a2a2a,stroke-width:1px,color:#707070
+    style Core fill:transparent,stroke:transparent,color:transparent
 ```
 
 **The key insight**: GitHub's `@claude` action runs *on your self-hosted runner*, uses *your Pro-plan session*, and reports back via labels and PR state. Orclaw never calls the Anthropic API directly. It just orchestrates **when** and **what** to mention.
