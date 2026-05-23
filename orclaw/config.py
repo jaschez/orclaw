@@ -191,8 +191,13 @@ def load_settings(
             "CEO/CTO when posting @claude comments. See docs/deployment.md."
         )
 
+    # Resolution order for data_dir:
+    #   1. explicit data_dir_override (tests)
+    #   2. ORCLAW_DATA_DIR env (set by install wizard / docker / cloud-init)
+    #   3. PathsSettings() default (/var/lib/orclaw/data)
+    env_data_dir = _env("ORCLAW_DATA_DIR")
     paths = PathsSettings(
-        data_dir=data_dir_override or PathsSettings().data_dir,
+        data_dir=data_dir_override or (Path(env_data_dir) if env_data_dir else PathsSettings().data_dir),
     )
 
     return Settings(

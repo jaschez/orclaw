@@ -17,6 +17,51 @@ curl -fsSL https://raw.githubusercontent.com/${GITHUB_USERNAME}/orclaw/main/inst
 
 ---
 
+## Demo
+
+![Dashboard tour](docs/img/dashboard-tour.gif)
+
+A walk through the dashboard with the demo seed loaded — status, layered
+plan, tuning page (concurrency cap + Pro-plan budget), runs table,
+events filter, controls, prompt editor, timers. Reproduce locally in
+under a minute:
+
+```bash
+git clone https://github.com/${GITHUB_USERNAME}/orclaw.git && cd orclaw
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -e '.[dashboard]'
+export ORCLAW_DATA_DIR=$(mktemp -d) ORCLAW_GITHUB_REPO=example/demo GITHUB_TOKEN=dummy
+orclaw demo-seed && orclaw dashboard serve --port 8888
+# → http://127.0.0.1:8888
+```
+
+<details>
+<summary>Stills of the showcase screens</summary>
+
+#### Orchestration plan
+The Kahn-layered scheduler. Each row is a layer; chips are issues.
+Green-arrow chips are next-to-dispatch. Layer N waits for Layer N-1
+to finish.
+
+![Orchestration](docs/img/dashboard-orchestration.png)
+
+#### Tuning
+Edit the concurrency cap at runtime (no redeploy). Watch the
+Pro-plan 5h budget gauge so you know when to dial up or down.
+
+![Tuning](docs/img/dashboard-tuning.png)
+
+#### Prompt editor
+Edit `implementer-comment.md` and `reviewer-comment.md` live. Saves
+go through the overlay layer — git-tracked defaults stay clean.
+Effective on the next orchestrator tick.
+
+![Prompt editor](docs/img/dashboard-prompt-editor.png)
+
+</details>
+
+---
+
 ## What is this?
 
 Orclaw is a self-hosted orchestrator that turns your GitHub issues into parallel work for Claude — paid through a single `$20/mo` Pro plan, **not** the metered API.

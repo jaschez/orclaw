@@ -553,6 +553,35 @@ def telegram_bot_cmd(log_level: str | None) -> None:
     asyncio.run(run_bot(settings))
 
 
+# --- demo-seed (populate local DB with synthetic data) -------------------
+
+
+@cli.command("demo-seed")
+@_common_options
+def demo_seed_cmd(log_level: str | None) -> None:
+    """Populate the local SQLite with synthetic batches + runs + events.
+
+    Useful for exploring the dashboard before pointing it at a real
+    target repo. Re-running clobbers the previous seed. The DB path
+    comes from ``ORCLAW_DB_PATH`` (defaults to
+    ``/var/lib/orclaw/orclaw.db``). For a throwaway:
+
+        export ORCLAW_DB_PATH=$(mktemp -t orclaw-demo.XXXXXX.db)
+        orclaw demo-seed
+        orclaw dashboard serve --port 8888
+    """
+    configure_logging(level=log_level or "INFO")
+    try:
+        settings = load_settings(require_secrets=False)
+    except OrclawError as e:
+        err_console.print(f"Config error: {e}")
+        sys.exit(1)
+    from orclaw.demo_seed import run as run_demo_seed
+
+    run_demo_seed(settings.paths.db_path)
+    console.print(f"[green]✓ demo data seeded to {settings.paths.db_path}[/green]")
+
+
 # --- events (internal log retention + ad-hoc query) -----------------------
 
 
