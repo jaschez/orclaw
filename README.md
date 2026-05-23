@@ -88,34 +88,33 @@ You write issues. Orclaw picks them in dependency order, fires up to **N** Claud
 ## How it works
 
 ```mermaid
-flowchart TD
-    classDef gh fill:#1f2328,stroke:#00ff88,stroke-width:2px,color:#f5f5f5
-    classDef engine fill:#111111,stroke:#00ff88,stroke-width:1px,color:#f5f5f5
-    classDef runner fill:#111111,stroke:#00b860,stroke-width:1px,color:#f5f5f5
-    classDef control fill:#111111,stroke:#ffaa00,stroke-width:1px,color:#f5f5f5
-    classDef you fill:#0a0a0a,stroke:#00ff88,stroke-width:2px,color:#00ff88
+flowchart TB
+    classDef gh      fill:#1c1c1c,stroke:#00ff88,stroke-width:2px,color:#f5f5f5
+    classDef engine  fill:#0d0d0d,stroke:#00ff88,stroke-width:1.5px,color:#f5f5f5
+    classDef runner  fill:#0d0d0d,stroke:#00b860,stroke-width:1.5px,color:#f5f5f5
+    classDef surface fill:#0d0d0d,stroke:#ffaa00,stroke-width:1.5px,color:#f5f5f5
+    classDef you     fill:#001a0d,stroke:#00ff88,stroke-width:2px,color:#00ff88
 
-    GH["<b>YOUR GITHUB REPO</b><br/>issues + PRs"]:::gh
+    GH["<b>GitHub repo</b><br/>issues · PRs · labels"]:::gh
 
-    subgraph VM["ORCLAW VM (yours)"]
-        direction TB
-        Planner["<b>PLANNER</b><br/>every 10m"]:::engine
-        Orchestrator["<b>ORCHESTRATOR</b><br/>every 30s"]:::engine
-        Pollback["<b>POLLBACK</b><br/>reads labels"]:::engine
-        Runner["<b>GitHub Actions runner</b> (self-hosted)<br/>claude-code-action → Claude on your Pro plan<br/>opens / pushes to PR"]:::runner
-        Controls["<b>Dashboard</b> · <b>Telegram bot</b> · <b>Specialist MCP</b><br/>shared SQLite + engine state"]:::control
+    subgraph VM[" <b>Orclaw VM</b> · yours "]
+      direction TB
+      Engine["<b>Engine core</b><br/>planner · orchestrator · pollback<br/>shared SQLite"]:::engine
+      Runner["<b>Self-hosted GitHub Actions runner</b><br/>claude-code-action — runs Claude on your <b>Pro plan</b>"]:::runner
+      Surfaces["<b>Dashboard · Telegram bot · Specialist MCP</b>"]:::surface
+
+      Engine <-->|"read · write"| Surfaces
     end
 
-    You["<b>browser</b> / <b>Telegram</b> / <b>claude.ai mobile (MCP)</b>"]:::you
+    You(("you")):::you
 
-    GH -->|"1. read open issues"| Planner
-    Planner --> Orchestrator
-    Pollback --> Orchestrator
-    Orchestrator -->|"2. @claude implement #42<br/>@claude review PR #99"| Runner
-    Runner -->|"label updates"| Pollback
-    Runner --> GH
-    Controls --- Orchestrator
-    You ==>|"3. watch / steer"| Controls
+    GH      -->|"1 · open issues + PRs"|              Engine
+    Engine  -->|"2 · @claude implement / review"|     GH
+    GH      -.->|"3 · webhook fires claude.yml"|       Runner
+    Runner  -->|"4 · opens PR + writes labels"|        GH
+    You     ==>|"5 · watch / steer"|                   Surfaces
+
+    style VM fill:#1a1a1a,stroke:#2a2a2a,stroke-width:1px,color:#707070
 ```
 
 **The key insight**: GitHub's `@claude` action runs *on your self-hosted runner*, uses *your Pro-plan session*, and reports back via labels and PR state. Orclaw never calls the Anthropic API directly. It just orchestrates **when** and **what** to mention.
