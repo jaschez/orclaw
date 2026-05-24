@@ -163,6 +163,99 @@ class TestPauseResume:
             assert row["value"] == "false"
 
 
+# --- send_daily_summary ---------------------------------------------------
+
+
+class TestSendDailySummary:
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_window(self, specialist_db: Path) -> None:
+        assert "between 1 and 30" in await t.send_daily_summary(window_days=0)
+        assert "between 1 and 30" in await t.send_daily_summary(window_days=999)
+
+    @pytest.mark.asyncio
+    async def test_does_not_post_when_telegram_disabled(
+        self, specialist_db: Path
+    ) -> None:
+        # Default fixture settings have telegram empty → disabled.
+        out = await t.send_daily_summary()
+        assert "not configured" in out
+        assert "*📊 orclaw" in out  # rendered message still returned
+
+    @pytest.mark.asyncio
+    async def test_reports_success_when_post_returns_true(
+        self,
+        tmp_data_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Build a settings with telegram enabled, patch load_settings + the
+        # outbound HTTP call so no real Telegram request is made.
+        from orclaw.config import (
+            BackoffSettings,
+            ConcurrencySettings,
+            GitHubSettings,
+            NotificationsSettings,
+            PathsSettings,
+            Settings,
+        )
+
+        init_db(tmp_data_dir / "engine.db")
+        cfg = Settings(
+            github=GitHubSettings(token="ghp_test"),
+            concurrency=ConcurrencySettings(),
+            backoff=BackoffSettings(),
+            notifications=NotificationsSettings(
+                telegram_bot_token="bot_x", telegram_chat_id="chat_y"
+            ),
+            paths=PathsSettings(data_dir=tmp_data_dir),
+        )
+        monkeypatch.setattr(
+            "orclaw.specialist.tools.load_settings", lambda *a, **kw: cfg
+        )
+
+        async def _fake_post(*_args: object, **_kwargs: object) -> bool:
+            return True
+
+        monkeypatch.setattr("orclaw.notifications.post_telegram", _fake_post)
+        out = await t.send_daily_summary()
+        assert "✓ Posted to Telegram" in out
+
+    @pytest.mark.asyncio
+    async def test_reports_failure_when_post_returns_false(
+        self,
+        tmp_data_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from orclaw.config import (
+            BackoffSettings,
+            ConcurrencySettings,
+            GitHubSettings,
+            NotificationsSettings,
+            PathsSettings,
+            Settings,
+        )
+
+        init_db(tmp_data_dir / "engine.db")
+        cfg = Settings(
+            github=GitHubSettings(token="ghp_test"),
+            concurrency=ConcurrencySettings(),
+            backoff=BackoffSettings(),
+            notifications=NotificationsSettings(
+                telegram_bot_token="bot_x", telegram_chat_id="chat_y"
+            ),
+            paths=PathsSettings(data_dir=tmp_data_dir),
+        )
+        monkeypatch.setattr(
+            "orclaw.specialist.tools.load_settings", lambda *a, **kw: cfg
+        )
+
+        async def _fake_post(*_args: object, **_kwargs: object) -> bool:
+            return False
+
+        monkeypatch.setattr("orclaw.notifications.post_telegram", _fake_post)
+        out = await t.send_daily_summary()
+        assert "❌ Telegram post FAILED" in out
+
+
 # --- input validation -----------------------------------------------------
 
 
@@ -208,6 +301,7 @@ class TestAllTools:
             "force_review",
             "propose_engine_change",  # sprint 12
             "merge_engine_pr",  # sprint 12
+            "send_daily_summary",
         }
         assert expected == names
 

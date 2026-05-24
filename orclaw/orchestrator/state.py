@@ -228,10 +228,29 @@ def issues_in_progress(conn: sqlite3.Connection) -> frozenset[int]:
     return frozenset(int(row["issue_number"]) for row in rows)
 
 
+#: Queued runs older than this are treated as zombies (external agent /
+#: GitHub Action never picked them up) and excluded from the in-flight
+#: count so they can't block the dispatcher indefinitely. The row stays
+#: in the DB with ``status='queued'`` for forensics — no destructive write.
+STALE_QUEUED_MINUTES = 60
+
+
 def active_run_count(conn: sqlite3.Connection) -> int:
-    """Number of ``runs`` rows currently in ``queued`` or ``running``."""
+    """Number of ``runs`` rows currently in flight for concurrency capping.
+
+    Counts ``running`` rows plus *fresh* ``queued`` rows (started within the
+    last :data:`STALE_QUEUED_MINUTES`). See the constant docstring for why
+    stale ``queued`` rows are excluded.
+
+    This is the **single source of truth** for the in-flight count — all
+    consumers (orchestrator dispatch cap, dashboard, CLI, MCP get_status,
+    Telegram bot) MUST call this helper rather than duplicate the SQL,
+    so the cap and what every UI displays never diverge.
+    """
     row = conn.execute(
-        "SELECT COUNT(*) AS n FROM runs WHERE status IN ('queued', 'running')"
+        "SELECT COUNT(*) AS n FROM runs "
+        "WHERE status = 'running' "
+        f"   OR (status = 'queued' AND started_at >= datetime('now', '-{STALE_QUEUED_MINUTES} minutes'))"
     ).fetchone()
     return int(row["n"]) if row else 0
 

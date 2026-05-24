@@ -55,6 +55,7 @@ from orclaw.exceptions import OrclawError
 from orclaw.logging import get_logger
 from orclaw.notifications import post_telegram
 from orclaw.orchestrator import (
+    active_run_count,
     effective_max_in_flight,
     get_concurrency_override,
     is_paused,
@@ -135,10 +136,7 @@ def create_app() -> FastAPI:
             effective_cap = effective_max_in_flight(
                 conn, settings_default=settings.concurrency.max_in_flight
             )
-            in_flight_row = conn.execute(
-                "SELECT COUNT(*) AS n FROM runs WHERE status IN ('queued', 'running')"
-            ).fetchone()
-            in_flight = int(in_flight_row["n"]) if in_flight_row else 0
+            in_flight = active_run_count(conn)
             batch_counts_rows = conn.execute(
                 "SELECT status, COUNT(*) AS n FROM batches GROUP BY status"
             ).fetchall()
@@ -277,13 +275,9 @@ def create_app() -> FastAPI:
                 "FROM batches "
                 "ORDER BY layer, id"  # id reflects insertion order = priority order
             ).fetchall()
-            in_flight_row = conn.execute(
-                "SELECT COUNT(*) AS n FROM runs WHERE status IN ('queued', 'running')"
-            ).fetchone()
+            in_flight = active_run_count(conn)
             paused = is_paused(conn)
             cap = effective_max_in_flight(conn, settings_default=settings.concurrency.max_in_flight)
-
-        in_flight = int(in_flight_row["n"]) if in_flight_row else 0
 
         # Build layer structure. Skipped + merged + failed stay in their
         # original layer so the UI can show full history, but flag them.

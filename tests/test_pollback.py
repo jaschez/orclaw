@@ -14,8 +14,10 @@ from orclaw.db import connect, init_db
 from orclaw.models import BatchStatus, PullRequest, RunStatus
 from orclaw.orchestrator.pollback import (
     _pick_verdict_label,
+    complete_implementer_runs,
     complete_reviewer_runs,
     mark_merged_batches,
+    reap_stale_queued_runs,
 )
 from orclaw.orchestrator.state import create_run
 
@@ -237,3 +239,143 @@ class TestMarkMergedBatches:
             result = mark_merged_batches(conn, [pr])
 
         assert sorted(result) == [(88, 200), (91, 200)]
+
+
+# --- complete_implementer_runs --------------------------------------------
+
+
+class TestCompleteImplementerRuns:
+    def test_marks_implementer_success_when_pr_closes_issue(
+        self, tmp_data_dir: Path
+    ) -> None:
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        with connect(db_path) as conn:
+            create_run(
+                conn, run_id="impl-1", agent="implementer", model="sonnet", issue_number=42
+            )
+
+        pr = _pr(number=500, closing=(42,))
+        with connect(db_path) as conn:
+            completed = complete_implementer_runs(conn, [pr])
+
+        assert completed == [("impl-1", 42, 500)]
+        with connect(db_path, read_only=True) as conn:
+            row = conn.execute(
+                "SELECT status, finished_at, pr_number FROM runs WHERE id = 'impl-1'"
+            ).fetchone()
+            assert row["status"] == RunStatus.SUCCESS.value
+            assert row["finished_at"] is not None
+            assert row["pr_number"] == 500  # back-filled from PR
+
+    def test_ignores_pr_without_closing_issues(self, tmp_data_dir: Path) -> None:
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        with connect(db_path) as conn:
+            create_run(
+                conn, run_id="impl-2", agent="implementer", model="sonnet", issue_number=99
+            )
+
+        pr = _pr(number=501, closing=())  # PR opens for the issue but doesn't close it
+        with connect(db_path) as conn:
+            completed = complete_implementer_runs(conn, [pr])
+
+        assert completed == []
+        with connect(db_path, read_only=True) as conn:
+            row = conn.execute(
+                "SELECT status FROM runs WHERE id = 'impl-2'"
+            ).fetchone()
+            assert row["status"] == RunStatus.QUEUED.value  # untouched
+
+    def test_idempotent_when_run_already_terminal(self, tmp_data_dir: Path) -> None:
+        # If an implementer run is already success/failed, leave it alone.
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        with connect(db_path) as conn:
+            create_run(
+                conn, run_id="impl-3", agent="implementer", model="sonnet", issue_number=7
+            )
+            conn.execute(
+                "UPDATE runs SET status = 'success' WHERE id = 'impl-3'"
+            )
+
+        pr = _pr(number=502, closing=(7,))
+        with connect(db_path) as conn:
+            completed = complete_implementer_runs(conn, [pr])
+
+        assert completed == []
+
+    def test_multi_closer_pr_closes_multiple_implementers(
+        self, tmp_data_dir: Path
+    ) -> None:
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        with connect(db_path) as conn:
+            create_run(
+                conn, run_id="impl-a", agent="implementer", model="sonnet", issue_number=10
+            )
+            create_run(
+                conn, run_id="impl-b", agent="implementer", model="sonnet", issue_number=11
+            )
+
+        pr = _pr(number=600, closing=(10, 11))
+        with connect(db_path) as conn:
+            completed = complete_implementer_runs(conn, [pr])
+
+        assert sorted(completed) == [("impl-a", 10, 600), ("impl-b", 11, 600)]
+
+
+# --- reap_stale_queued_runs ------------------------------------------------
+
+
+class TestReapStaleQueuedRuns:
+    def test_reaps_only_stale_queued_rows(self, tmp_data_dir: Path) -> None:
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        with connect(db_path) as conn:
+            conn.executemany(
+                "INSERT INTO runs (id, agent, model, status, started_at, issue_number) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    # 3h-old queued → reaped
+                    ("stale-impl", "implementer", "sonnet", "queued", "3h", 110),
+                    ("stale-rev", "reviewer", "sonnet", "queued", "3h", None),
+                    # fresh queued → untouched
+                    ("fresh", "implementer", "sonnet", "queued", "now", 200),
+                    # already terminal → untouched
+                    ("done", "implementer", "sonnet", "success", "3h", 50),
+                    # running of any age → untouched
+                    ("hot", "reviewer", "sonnet", "running", "3h", None),
+                ],
+            )
+            conn.execute(
+                "UPDATE runs SET started_at = datetime('now') WHERE started_at = 'now'"
+            )
+            conn.execute(
+                "UPDATE runs SET started_at = datetime('now', '-3 hours') "
+                "WHERE started_at = '3h'"
+            )
+
+            reaped = reap_stale_queued_runs(conn, max_age_hours=2)
+
+        assert sorted(r[0] for r in reaped) == ["stale-impl", "stale-rev"]
+
+        with connect(db_path, read_only=True) as conn:
+            statuses = {
+                row["id"]: row["status"]
+                for row in conn.execute("SELECT id, status FROM runs").fetchall()
+            }
+        assert statuses["stale-impl"] == RunStatus.TIMEOUT.value
+        assert statuses["stale-rev"] == RunStatus.TIMEOUT.value
+        assert statuses["fresh"] == RunStatus.QUEUED.value
+        assert statuses["done"] == RunStatus.SUCCESS.value
+        assert statuses["hot"] == RunStatus.RUNNING.value
+
+    def test_noop_when_no_stale_rows(self, tmp_data_dir: Path) -> None:
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        with connect(db_path) as conn:
+            create_run(
+                conn, run_id="fresh", agent="implementer", model="sonnet", issue_number=1
+            )
+            assert reap_stale_queued_runs(conn) == []

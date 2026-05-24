@@ -122,8 +122,16 @@ def format_summary_telegram(summary: SummaryWindow) -> str:
     hours = int((summary.until - summary.since).total_seconds() / 3600)
     period_label = "24h" if hours == 24 else f"{hours}h"
 
+    # Telegram MarkdownV1 treats `_` as italic — any literal underscore in
+    # the message must be hyphenated (or escaped with `\\_`). Agent names like
+    # ``batch_planner`` and the ``in_progress`` label both have underscores
+    # that would otherwise open an italic entity that never closes, breaking
+    # the parser with HTTP 400 "can't find end of the entity".
     by_agent_lines = (
-        "\n".join(f"  - {agent}: `{n}`" for agent, n in sorted(summary.runs_by_agent.items()))
+        "\n".join(
+            f"  - {agent.replace('_', '-')}: `{n}`"
+            for agent, n in sorted(summary.runs_by_agent.items())
+        )
         or "  - (none)"
     )
 
@@ -135,7 +143,7 @@ def format_summary_telegram(summary: SummaryWindow) -> str:
         f"By agent:\n{by_agent_lines}\n\n"
         f"*Batches (current snapshot):*\n"
         f"  - merged: `{summary.batches_merged}`\n"
-        f"  - in_progress: `{summary.batches_in_progress}`\n"
+        f"  - in-progress: `{summary.batches_in_progress}`\n"
         f"  - pending: `{summary.batches_pending}`\n"
         f"  - failed: `{summary.batches_failed}`\n\n"
         f"*Reviews ({period_label}):*\n"

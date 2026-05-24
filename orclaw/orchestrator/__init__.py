@@ -24,6 +24,7 @@ from orclaw.orchestrator.pollback import PollbackResult, run_pollback
 from orclaw.orchestrator.state import (
     BatchSnapshot,
     OrchestratorState,
+    active_run_count,
     create_run,
     effective_max_in_flight,
     get_concurrency_override,
@@ -42,6 +43,7 @@ __all__ = [
     "OrchestratorState",
     "PollbackResult",
     "ReviewerDispatchResult",
+    "active_run_count",
     "create_run",
     "dispatch_implementer",
     "dispatch_reviewer",

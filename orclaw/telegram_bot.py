@@ -36,6 +36,7 @@ import httpx
 from orclaw.db import connect
 from orclaw.logging import get_logger
 from orclaw.orchestrator import (
+    active_run_count,
     effective_max_in_flight,
     is_paused,
     orchestrator_tick,
@@ -76,10 +77,7 @@ async def _cmd_status(settings: Settings) -> str:
         cap = effective_max_in_flight(
             conn, settings_default=settings.concurrency.max_in_flight
         )
-        in_flight_row = conn.execute(
-            "SELECT COUNT(*) AS n FROM runs WHERE status IN ('queued', 'running')"
-        ).fetchone()
-        in_flight = int(in_flight_row["n"]) if in_flight_row else 0
+        in_flight = active_run_count(conn)
         batch_rows = conn.execute(
             "SELECT status, COUNT(*) AS n FROM batches GROUP BY status"
         ).fetchall()

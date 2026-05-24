@@ -20,7 +20,6 @@ intentional: secrets may have been rotated between calls.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import subprocess
 from datetime import timedelta
@@ -31,6 +30,7 @@ from orclaw.exceptions import OrclawError
 from orclaw.github_client import GitHubAPIConfig, GitHubClient
 from orclaw.logging import get_logger
 from orclaw.orchestrator import (
+    active_run_count,
     is_paused,
     orchestrator_tick,
     set_paused,
@@ -77,13 +77,14 @@ def get_status() -> str:
         run_rows = conn.execute(
             "SELECT agent, status, COUNT(*) AS n FROM runs GROUP BY agent, status"
         ).fetchall()
-        in_flight = conn.execute(
-            "SELECT COUNT(*) AS n FROM runs WHERE status IN ('queued', 'running')"
-        ).fetchone()
+        # Single source of truth — same count the orchestrator uses to cap
+        # dispatching, so the displayed "in flight" never diverges from the
+        # real cap (stale queued zombies are excluded by ``active_run_count``).
+        in_flight_n = active_run_count(conn)
 
     lines = [
         f"**Paused:** {'yes ⏸' if paused else 'no ▶'}",
-        f"**In flight:** {in_flight['n']} / {settings.concurrency.max_in_flight}",
+        f"**In flight:** {in_flight_n} / {settings.concurrency.max_in_flight}",
         "",
         "**Batches:**",
     ]
@@ -265,7 +266,7 @@ def get_summary(window_days: int = 1) -> str:
     return format_summary_telegram(snap)
 
 
-def doctor() -> str:
+async def doctor() -> str:
     """Run the engine's diagnostic health-check.
 
     Use this when the user asks "is something broken?", "run a doctor
@@ -311,7 +312,7 @@ def doctor() -> str:
         except Exception as e:
             return False, str(e)
 
-    ok, msg = asyncio.run(_gh())
+    ok, msg = await _gh()
     checks.append((f"github ({settings.github.repo})", ok, msg))
 
     checks.append(
@@ -539,6 +540,45 @@ async def force_review(pr_number: int) -> str:
     if not removed:
         return f"PR #{pr_number} had no review:* labels — nothing to do."
     return f"🔁 PR #{pr_number}: removed {removed}. Next tick will re-dispatch the reviewer."
+
+
+async def send_daily_summary(window_days: int = 1) -> str:
+    """Build the activity digest and post it to Telegram *now*.
+
+    Use when the user wants to fire the summary on-demand — verifying
+    Telegram delivery after a notifications-related fix, or sending an
+    ad-hoc digest outside the systemd timer ("send me the summary now",
+    "post the digest", "trigger the daily summary"). For a passive render
+    without posting, use :func:`get_summary` instead.
+
+    Returns the rendered message *plus* the Telegram delivery status, so
+    the caller can confirm both halves at once.
+    """
+    if window_days < 1 or window_days > 30:
+        return "❌ `window_days` must be between 1 and 30."
+
+    try:
+        settings = load_settings(require_secrets=True)
+    except OrclawError as e:
+        return f"❌ Config error: {e}"
+
+    with connect(settings.paths.db_path, read_only=True) as conn:
+        snap = build_summary(conn, window=timedelta(days=window_days))
+    rendered = format_summary_telegram(snap)
+
+    if not settings.notifications.telegram_enabled:
+        return f"⚠️ Telegram not configured — not posting.\n\n{rendered}"
+
+    from orclaw.notifications import post_telegram
+
+    try:
+        sent = await post_telegram(settings.notifications, rendered)
+    except Exception as e:
+        return f"❌ Telegram post raised: {e}\n\n{rendered}"
+
+    if sent:
+        return f"✓ Posted to Telegram.\n\n{rendered}"
+    return f"❌ Telegram post FAILED (see orclaw logs).\n\n{rendered}"
 
 
 # =========================================================================
@@ -856,6 +896,7 @@ def all_tools() -> dict[str, object]:
         "skip_issue": skip_issue,
         "require_human_review": require_human_review,
         "force_review": force_review,
+        "send_daily_summary": send_daily_summary,
     }
 
 
