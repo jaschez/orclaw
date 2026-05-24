@@ -66,6 +66,7 @@ def build_server() -> FastMCP:
     mcp.tool()(t.skip_issue)
     mcp.tool()(t.require_human_review)
     mcp.tool()(t.force_review)
+    mcp.tool()(t.send_daily_summary)
     mcp.tool()(t.propose_engine_change)
     mcp.tool()(t.merge_engine_pr)
 

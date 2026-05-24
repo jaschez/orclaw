@@ -198,6 +198,34 @@ class TestActiveRunCount:
             )
             assert active_run_count(conn) == 2
 
+    def test_excludes_stale_queued(self, tmp_data_dir: Path) -> None:
+        """Queued runs older than STALE_QUEUED_MINUTES must not count toward
+        the in-flight cap, otherwise zombie runs (external agent never picked
+        them up) block the dispatcher forever."""
+        db_path = tmp_data_dir / "engine.db"
+        _seed(db_path)
+        with connect(db_path) as conn:
+            conn.executemany(
+                "INSERT INTO runs (id, agent, model, status, started_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    # fresh queued — counts
+                    ("fresh", "reviewer", "sonnet", "queued", "now"),
+                    # 2-hour-old queued — zombie, excluded
+                    ("zombie", "reviewer", "sonnet", "queued", "2h-ago"),
+                    # running of any age — always counts
+                    ("running", "implementer", "sonnet", "running", "2h-ago"),
+                ],
+            )
+            conn.execute(
+                "UPDATE runs SET started_at = datetime('now') WHERE started_at = 'now'"
+            )
+            conn.execute(
+                "UPDATE runs SET started_at = datetime('now', '-2 hours') "
+                "WHERE started_at = '2h-ago'"
+            )
+            assert active_run_count(conn) == 2
+
 
 class TestIssuesInProgress:
     def test_returns_in_progress_set(self, tmp_data_dir: Path) -> None:

@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from orclaw.event_store import insert_event
 from orclaw.github_client import GitHubAPIConfig, GitHubClient
 from orclaw.logging import get_logger
 from orclaw.models import ReviewVerdict, RunStatus
@@ -68,10 +69,21 @@ class PollbackResult:
     """``(pr_number, reason)`` — usually because no matching run row exists."""
     batches_merged: list[tuple[int, int]] = field(default_factory=list)
     """``(issue_number, pr_number)`` for each batch transitioned to merged."""
+    implementers_completed: list[tuple[str, int, int]] = field(default_factory=list)
+    """``(run_id, issue_number, pr_number)`` for each implementer run closed
+    because a PR opened that closes its issue."""
+    runs_timed_out: list[tuple[str, str, int | None]] = field(default_factory=list)
+    """``(run_id, agent, issue_number)`` for each ``queued`` run reaped as
+    timeout because nothing picked it up within the deadline."""
 
     @property
     def is_noop(self) -> bool:
-        return not (self.reviews_completed or self.batches_merged)
+        return not (
+            self.reviews_completed
+            or self.batches_merged
+            or self.implementers_completed
+            or self.runs_timed_out
+        )
 
 
 # --- Reviewer verdict reconciliation --------------------------------------
@@ -166,6 +178,98 @@ def complete_reviewer_runs(
         reviews_completed=completed,
         reviews_skipped=skipped,
     )
+
+
+# --- Implementer reconciliation -------------------------------------------
+
+#: A queued/running run older than this is reaped as ``timeout``. Picked to
+#: comfortably exceed a normal implementer execution (~30min) while still
+#: catching truly stuck rows the same day. See :func:`reap_stale_queued_runs`.
+RUN_TIMEOUT_HOURS = 2
+
+
+def complete_implementer_runs(
+    conn: sqlite3.Connection,
+    prs: list[PullRequest],
+) -> list[tuple[str, int, int]]:
+    """Mark implementer runs as ``success`` when a PR closes their issue.
+
+    The implementer flow doesn't apply terminal labels — the signal that an
+    implementer "finished" is that a PR landed referencing the issue (via
+    GitHub's ``closingIssuesReferences``). For each such PR, we find the
+    matching queued/running implementer run and close it.
+
+    Pure-DB function. Returns ``(run_id, issue_number, pr_number)`` for each
+    transitioned run so the caller can emit structured events.
+    """
+    completed: list[tuple[str, int, int]] = []
+    for pr in prs:
+        for issue_number in pr.closing_issues:
+            run_row = conn.execute(
+                "SELECT id FROM runs "
+                "WHERE agent = 'implementer' AND issue_number = ? "
+                "AND status IN ('queued', 'running') "
+                "ORDER BY started_at DESC LIMIT 1",
+                (issue_number,),
+            ).fetchone()
+            if run_row is None:
+                continue
+            try:
+                conn.execute(
+                    "UPDATE runs SET status = ?, finished_at = datetime('now'), "
+                    "pr_number = COALESCE(pr_number, ?) WHERE id = ?",
+                    (RunStatus.SUCCESS.value, pr.number, run_row["id"]),
+                )
+                completed.append((run_row["id"], issue_number, pr.number))
+            except Exception as e:
+                log.error(
+                    "pollback_implementer_db_failed",
+                    run_id=run_row["id"],
+                    issue=issue_number,
+                    pr=pr.number,
+                    error=str(e),
+                )
+    return completed
+
+
+def reap_stale_queued_runs(
+    conn: sqlite3.Connection,
+    *,
+    max_age_hours: int = RUN_TIMEOUT_HOURS,
+) -> list[tuple[str, str, int | None]]:
+    """Mark queued runs older than ``max_age_hours`` as ``timeout``.
+
+    The external agent (Claude Pro / GitHub Action) never picked them up,
+    so they'd otherwise sit ``queued`` forever — visible to the dashboard
+    but invisible to operators. Marking them ``timeout`` makes failures
+    auditable and lets the daily summary count them in ``runs_failed``.
+
+    Pure-DB function. Returns ``(run_id, agent, issue_number)`` for each
+    reaped run so the caller can emit structured events.
+    """
+    rows = conn.execute(
+        "SELECT id, agent, issue_number FROM runs "
+        "WHERE status = 'queued' "
+        f"  AND started_at < datetime('now', '-{max_age_hours} hours')"
+    ).fetchall()
+    if not rows:
+        return []
+    reaped: list[tuple[str, str, int | None]] = []
+    for row in rows:
+        try:
+            conn.execute(
+                "UPDATE runs SET status = ?, finished_at = datetime('now'), "
+                "notes = COALESCE(notes, '') || ? WHERE id = ?",
+                (
+                    RunStatus.TIMEOUT.value,
+                    f"\n[pollback] reaped as timeout after {max_age_hours}h queued",
+                    row["id"],
+                ),
+            )
+            reaped.append((row["id"], row["agent"], row["issue_number"]))
+        except Exception as e:
+            log.error("pollback_reap_db_failed", run_id=row["id"], error=str(e))
+    return reaped
 
 
 # --- Merged-PR reconciliation ---------------------------------------------
@@ -264,20 +368,55 @@ async def run_pollback(settings: Settings) -> PollbackResult:
     # we only checked open PRs.
     all_prs_with_labels = open_prs + closed_prs
 
-    # All the SQL stays in one connection so the two reconciliations + the
+    # All the SQL stays in one connection so the reconciliations + the
     # cursor bump are atomic at the tick level.
     with connect(settings.paths.db_path) as conn:
         review_result = complete_reviewer_runs(conn, all_prs_with_labels)
+        implementer_completed = complete_implementer_runs(conn, all_prs_with_labels)
         merged_pairs = mark_merged_batches(conn, closed_prs)
+        runs_timed_out = reap_stale_queued_runs(conn)
         _set_cursor(conn, datetime.now(UTC))
+
+    # Emit structured events for the new reconciliations so that
+    # ``timeout`` / ``success`` transitions are auditable from the events
+    # table (otherwise implementer outcomes are invisible to operators).
+    for run_id, issue_number, pr_number in implementer_completed:
+        insert_event(
+            settings.paths.db_path,
+            level="info",
+            event="implementer_completed",
+            attrs={
+                "run_id": run_id,
+                "issue_number": issue_number,
+                "pr_number": pr_number,
+            },
+            module=__name__,
+        )
+    for timed_out_id, timed_out_agent, timed_out_issue in runs_timed_out:
+        insert_event(
+            settings.paths.db_path,
+            level="warning",
+            event="run_timed_out",
+            attrs={
+                "run_id": timed_out_id,
+                "agent": timed_out_agent,
+                "issue_number": timed_out_issue,
+                "max_age_hours": RUN_TIMEOUT_HOURS,
+            },
+            module=__name__,
+        )
 
     log.info(
         "pollback_completed",
         reviews_completed=len(review_result.reviews_completed),
+        implementers_completed=len(implementer_completed),
         batches_merged=len(merged_pairs),
+        runs_timed_out=len(runs_timed_out),
     )
     return PollbackResult(
         reviews_completed=review_result.reviews_completed,
         reviews_skipped=review_result.reviews_skipped,
         batches_merged=merged_pairs,
+        implementers_completed=implementer_completed,
+        runs_timed_out=runs_timed_out,
     )
