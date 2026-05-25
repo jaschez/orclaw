@@ -18,6 +18,7 @@ from orclaw.orchestrator.pollback import (
     complete_reviewer_runs,
     mark_merged_batches,
     reap_stale_queued_runs,
+    recover_zombie_batches,
 )
 from orclaw.orchestrator.state import create_run
 
@@ -144,7 +145,8 @@ class TestCompleteReviewerRuns:
 
     def test_marks_run_failed_on_requires_human_review(self, tmp_data_dir: Path) -> None:
         # The reviewer agent escalates without a `review:*` prefix sometimes
-        # label. Pollback should still close the run as a hard-block — same effect as `review:hard-block` — so the cap
+        # (saw on orclaw test reference). Pollback should still close the run as
+        # a hard-block — same effect as `review:hard-block` — so the cap
         # gets freed promptly.
         db_path = tmp_data_dir / "engine.db"
         init_db(db_path)
@@ -447,3 +449,160 @@ class TestReapStaleQueuedRuns:
         with connect(db_path) as conn:
             create_run(conn, run_id="fresh", agent="implementer", model="sonnet", issue_number=1)
             assert reap_stale_queued_runs(conn) == []
+
+
+# --- recover_zombie_batches -----------------------------------------------
+
+
+class TestRecoverZombieBatches:
+    """The zombie pattern: in_progress batch whose implementer died
+    without producing a PR. Operator caught this manually three times in
+    one day before this recovery landed (issues #195, #205 twice). The
+    fix flips the batch back to pending so the dispatcher can re-pick on
+    the next tick; the caller removes the agent:start label.
+    """
+
+    def _setup_batch_with_run(
+        self, db_path: Path, *,
+        batch_id: int, issue: int, run_id: str, run_status: str,
+        pr_number: int | None = None,
+    ) -> None:
+        with connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO batches (id, layer, issue_number, status, implementer_run_id, pr_number) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (batch_id, 0, issue, BatchStatus.IN_PROGRESS.value, run_id, pr_number),
+            )
+            create_run(conn, run_id=run_id, agent="implementer", model="sonnet", issue_number=issue)
+            conn.execute("UPDATE runs SET status = ? WHERE id = ?", (run_status, run_id))
+
+    def test_resets_batch_when_implementer_timed_out(self, tmp_data_dir: Path) -> None:
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        self._setup_batch_with_run(
+            db_path, batch_id=1, issue=42, run_id="impl-dead", run_status="timeout",
+        )
+
+        with connect(db_path) as conn:
+            recovered = recover_zombie_batches(conn)
+
+        assert recovered == [42]
+        with connect(db_path, read_only=True) as conn:
+            row = conn.execute(
+                "SELECT status, implementer_run_id FROM batches WHERE id = 1"
+            ).fetchone()
+            assert row["status"] == BatchStatus.PENDING.value
+            assert row["implementer_run_id"] is None
+
+    def test_resets_batch_when_implementer_aborted(self, tmp_data_dir: Path) -> None:
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        self._setup_batch_with_run(
+            db_path, batch_id=1, issue=43, run_id="impl-abort", run_status="aborted",
+        )
+
+        with connect(db_path) as conn:
+            recovered = recover_zombie_batches(conn)
+        assert recovered == [43]
+
+    def test_resets_batch_when_implementer_failed(self, tmp_data_dir: Path) -> None:
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        self._setup_batch_with_run(
+            db_path, batch_id=1, issue=44, run_id="impl-fail", run_status="failed",
+        )
+
+        with connect(db_path) as conn:
+            recovered = recover_zombie_batches(conn)
+        assert recovered == [44]
+
+    def test_does_not_reset_when_implementer_still_queued(self, tmp_data_dir: Path) -> None:
+        # Run is healthy in flight; recovery must NOT touch it or we'd
+        # interrupt a working implementer.
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        self._setup_batch_with_run(
+            db_path, batch_id=1, issue=45, run_id="impl-live", run_status="queued",
+        )
+
+        with connect(db_path) as conn:
+            recovered = recover_zombie_batches(conn)
+        assert recovered == []
+        with connect(db_path, read_only=True) as conn:
+            row = conn.execute("SELECT status FROM batches WHERE id = 1").fetchone()
+            assert row["status"] == BatchStatus.IN_PROGRESS.value
+
+    def test_does_not_reset_when_implementer_succeeded(self, tmp_data_dir: Path) -> None:
+        # Success but no PR yet — the implementer wrote the PR off-band
+        # and pollback's complete_implementer_runs will close the loop
+        # next tick once the PR shows up. Don't preempt that.
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        self._setup_batch_with_run(
+            db_path, batch_id=1, issue=46, run_id="impl-done", run_status="success",
+        )
+
+        with connect(db_path) as conn:
+            recovered = recover_zombie_batches(conn)
+        assert recovered == []
+
+    def test_does_not_reset_when_pr_already_opened(self, tmp_data_dir: Path) -> None:
+        # Even if the run is terminal-failure, if a PR exists the batch
+        # is legitimately in flight (the PR may be in review or merging).
+        # Recovery must respect that.
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        self._setup_batch_with_run(
+            db_path, batch_id=1, issue=47, run_id="impl-with-pr",
+            run_status="timeout", pr_number=999,
+        )
+
+        with connect(db_path) as conn:
+            recovered = recover_zombie_batches(conn)
+        assert recovered == []
+
+    def test_ignores_pending_batches(self, tmp_data_dir: Path) -> None:
+        # Recovery only targets in_progress batches. A pending batch with
+        # a dangling implementer_run_id from a previous failed dispatch
+        # is fine — the dispatcher will pick it up normally.
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        with connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO batches (id, layer, issue_number, status, implementer_run_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (1, 0, 48, BatchStatus.PENDING.value, "impl-old"),
+            )
+            create_run(conn, run_id="impl-old", agent="implementer", model="sonnet", issue_number=48)
+            conn.execute("UPDATE runs SET status = 'timeout' WHERE id = 'impl-old'")
+
+        with connect(db_path) as conn:
+            recovered = recover_zombie_batches(conn)
+        assert recovered == []
+
+    def test_ignores_merged_batches(self, tmp_data_dir: Path) -> None:
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        with connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO batches (id, layer, issue_number, status, implementer_run_id, pr_number) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (1, 0, 49, BatchStatus.MERGED.value, "impl-old", 555),
+            )
+            create_run(conn, run_id="impl-old", agent="implementer", model="sonnet", issue_number=49)
+            conn.execute("UPDATE runs SET status = 'timeout' WHERE id = 'impl-old'")
+
+        with connect(db_path) as conn:
+            recovered = recover_zombie_batches(conn)
+        assert recovered == []
+
+    def test_recovers_multiple_zombies_in_one_pass(self, tmp_data_dir: Path) -> None:
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        self._setup_batch_with_run(db_path, batch_id=1, issue=50, run_id="z1", run_status="timeout")
+        self._setup_batch_with_run(db_path, batch_id=2, issue=51, run_id="z2", run_status="aborted")
+        self._setup_batch_with_run(db_path, batch_id=3, issue=52, run_id="live", run_status="queued")
+
+        with connect(db_path) as conn:
+            recovered = recover_zombie_batches(conn)
+        assert sorted(recovered) == [50, 51]
