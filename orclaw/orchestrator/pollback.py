@@ -5,7 +5,7 @@ do whatever they do — open a PR, apply a label, etc. — *outside* the
 engine's view. Pollback is the inverse: each tick reads GitHub's current
 truth and updates the local DB so the next decision sees fresh data.
 
-Two reconciliations happen here:
+Three reconciliations happen here:
 
 1. **Reviewer verdicts**: for each open PR with a ``review:*`` terminal
    label, find the matching ``runs`` row (agent='reviewer', queued/running,
@@ -17,6 +17,13 @@ Two reconciliations happen here:
 2. **Merged PRs**: for each closed+merged PR against ``develop`` since
    the last cursor, mark the corresponding ``batches`` rows (via the PR's
    ``closing_issues``) as ``merged``.
+
+3. **Zombie batches**: an ``in_progress`` batch whose implementer run got
+   reaped (timeout/aborted/failed) WITHOUT producing a PR is stuck — the
+   dispatcher won't re-pick it because the batch isn't ``pending`` AND the
+   ``agent:start`` label is still on the issue. Recover those: flip the
+   batch back to ``pending`` and remove the label so the next dispatcher
+   tick will re-dispatch automatically.
 
 The cursor ``last_merged_pr_check`` lives in ``engine_state`` and is
 updated at the end of each successful poll.
@@ -31,7 +38,7 @@ from typing import TYPE_CHECKING
 from orclaw.event_store import insert_event
 from orclaw.github_client import GitHubAPIConfig, GitHubClient
 from orclaw.logging import get_logger
-from orclaw.models import ReviewVerdict, RunStatus
+from orclaw.models import BatchStatus, ReviewVerdict, RunStatus
 from orclaw.orchestrator.state import mark_batch_merged
 
 if TYPE_CHECKING:
@@ -54,7 +61,7 @@ log = get_logger(__name__)
 #: escalates, but in practice it sometimes only applies
 #: ``requires-human-review`` (the operator-visible label that auto-merge
 #: respects). Without this entry the reviewer run sits in ``queued`` until
-#: the 2h reaper kills it — saturating the concurrency cap with a zombie
+#: the reaper kills it — saturating the concurrency cap with a zombie
 #: that's already decided. Treat both labels as the same terminal verdict.
 LABEL_TO_VERDICT: dict[str, tuple[ReviewVerdict, RunStatus]] = {
     "review:approved": (ReviewVerdict.APPROVED, RunStatus.SUCCESS),
@@ -63,6 +70,12 @@ LABEL_TO_VERDICT: dict[str, tuple[ReviewVerdict, RunStatus]] = {
     "review:hard-block": (ReviewVerdict.HARD_BLOCK, RunStatus.FAILED),
     "requires-human-review": (ReviewVerdict.HARD_BLOCK, RunStatus.FAILED),
 }
+
+
+#: Label the implementer dispatcher adds to issues so the cleanup workflow
+#: + this pollback can spot in-flight work. Mirrored here to avoid an
+#: import cycle with ``orchestrator.dispatcher``.
+AGENT_START_LABEL = "agent:start"
 
 
 # --- Result DTO ------------------------------------------------------------
@@ -84,6 +97,10 @@ class PollbackResult:
     runs_timed_out: list[tuple[str, str, int | None]] = field(default_factory=list)
     """``(run_id, agent, issue_number)`` for each ``queued`` run reaped as
     timeout because nothing picked it up within the deadline."""
+    zombies_recovered: list[int] = field(default_factory=list)
+    """``issue_number`` for each in_progress batch whose dead implementer
+    run was reset back to ``pending`` (and whose ``agent:start`` label was
+    removed) so the dispatcher can re-pick on the next tick."""
 
     @property
     def is_noop(self) -> bool:
@@ -92,6 +109,7 @@ class PollbackResult:
             or self.batches_merged
             or self.implementers_completed
             or self.runs_timed_out
+            or self.zombies_recovered
         )
 
 
@@ -195,10 +213,14 @@ def complete_reviewer_runs(
 
 # --- Implementer reconciliation -------------------------------------------
 
-#: A queued/running run older than this is reaped as ``timeout``. Picked to
-#: comfortably exceed a normal implementer execution (~30min) while still
-#: catching truly stuck rows the same day. See :func:`reap_stale_queued_runs`.
-RUN_TIMEOUT_HOURS = 2
+#: A queued/running run older than this is reaped as ``timeout``. Lowered
+#: from 2h to 1h on 2026-05-25 — a normal implementer takes <30 min, so
+#: 1h covers the legitimate-slow case comfortably while clearing zombie
+#: rows the same hour rather than half a workday later. The zombie
+#: recovery downstream (:func:`recover_zombie_batches`) only kicks in
+#: once a run is reaped, so the threshold directly determines how long a
+#: stuck issue blocks the cap.
+RUN_TIMEOUT_HOURS = 1
 
 
 def complete_implementer_runs(
@@ -269,7 +291,9 @@ def reap_stale_queued_runs(
     auditable and lets the daily summary count them in ``runs_failed``.
 
     Pure-DB function. Returns ``(run_id, agent, issue_number)`` for each
-    reaped run so the caller can emit structured events.
+    reaped run so the caller can emit structured events. :func:`recover_zombie_batches`
+    runs right after and translates the reaped implementer runs into
+    pending batches (+ label cleanup) so the dispatcher self-heals.
     """
     rows = conn.execute(
         "SELECT id, agent, issue_number FROM runs "
@@ -294,6 +318,76 @@ def reap_stale_queued_runs(
         except Exception as e:
             log.error("pollback_reap_db_failed", run_id=row["id"], error=str(e))
     return reaped
+
+
+def recover_zombie_batches(conn: sqlite3.Connection) -> list[int]:
+    """Reset in_progress batches whose implementer run died without a PR.
+
+    The zombie pattern (caught manually 3+ times today before this lands):
+
+    1. Dispatcher dispatches implementer → adds ``agent:start`` label,
+       inserts ``runs`` row, sets batch ``in_progress``.
+    2. Implementer never pushes a PR (Claude session crashed, hit a
+       quota wall, or just hung).
+    3. ``reap_stale_queued_runs`` eventually flips the run to
+       ``timeout`` (or it was already ``aborted`` / ``failed``).
+    4. **But the batch stays ``in_progress``** with the dead run as its
+       ``implementer_run_id``. The dispatcher's two guards both fire:
+       (a) batch isn't ``pending`` so it won't be picked, (b) issue
+       still has ``agent:start`` so even if the batch was reset the
+       guard skips it.
+    5. Operator must manually: SQL-reset the batch + ``gh issue edit
+       --remove-label agent:start`` + ``force_tick``.
+
+    This function does steps (a) and (b) of the recovery automatically.
+    The caller is responsible for the label removal via the GitHub
+    client (we keep this function pure-DB so it's testable without
+    network mocks).
+
+    Conservative — only resets when ALL of:
+
+    - batch.status == 'in_progress'
+    - batch.pr_number IS NULL (no PR opened; if a PR exists, the batch
+      is legitimately in flight waiting for review/merge)
+    - batch.implementer_run_id IS NOT NULL
+    - the referenced run is in a terminal-failure state
+      (timeout / aborted / failed). Success/queued/running are LEFT
+      ALONE so we never disturb a healthy in-flight run.
+
+    Returns the ``issue_number`` of each batch that was reset. The
+    caller uses this list to remove ``agent:start`` from those issues.
+    """
+    rows = conn.execute(
+        """
+        SELECT b.id AS batch_id, b.issue_number, b.implementer_run_id, r.status AS run_status
+        FROM batches b
+        JOIN runs r ON r.id = b.implementer_run_id
+        WHERE b.status = 'in_progress'
+          AND b.pr_number IS NULL
+          AND b.implementer_run_id IS NOT NULL
+          AND r.status IN ('timeout', 'aborted', 'failed')
+        """
+    ).fetchall()
+    if not rows:
+        return []
+
+    recovered: list[int] = []
+    for row in rows:
+        try:
+            conn.execute(
+                "UPDATE batches SET status = ?, implementer_run_id = NULL, "
+                "updated_at = datetime('now') WHERE id = ?",
+                (BatchStatus.PENDING.value, row["batch_id"]),
+            )
+            recovered.append(row["issue_number"])
+        except Exception as e:
+            log.error(
+                "pollback_zombie_recover_failed",
+                batch_id=row["batch_id"],
+                issue=row["issue_number"],
+                error=str(e),
+            )
+    return recovered
 
 
 # --- Merged-PR reconciliation ---------------------------------------------
@@ -356,7 +450,8 @@ def _set_cursor(conn: sqlite3.Connection, ts: datetime) -> None:
 
 
 async def run_pollback(settings: Settings) -> PollbackResult:
-    """One pollback cycle: reconcile reviewer verdicts + merged batches.
+    """One pollback cycle: reconcile reviewer verdicts + merged batches +
+    zombie recovery.
 
     Designed to be called at the top of every orchestrator tick, before
     any decision logic. If GitHub is unreachable we log + return an empty
@@ -399,7 +494,34 @@ async def run_pollback(settings: Settings) -> PollbackResult:
         implementer_completed = complete_implementer_runs(conn, all_prs_with_labels)
         merged_pairs = mark_merged_batches(conn, closed_prs)
         runs_timed_out = reap_stale_queued_runs(conn)
+        # Zombie recovery MUST come after reap_stale_queued_runs so any
+        # newly-reaped runs are considered. It MUST come after
+        # mark_merged_batches so we don't reset a batch the merger just
+        # transitioned (mark_merged_batches makes it ``merged``; we
+        # only touch ``in_progress``, but ordering keeps intent clear).
+        zombies_recovered = recover_zombie_batches(conn)
         _set_cursor(conn, datetime.now(UTC))
+
+    # Step 3 of zombie recovery: remove ``agent:start`` from each recovered
+    # issue so the dispatcher's "skip if agent:start present" guard
+    # doesn't immediately re-block. Done OUTSIDE the DB block because it
+    # needs the GitHub client. Best-effort — if the label was already gone
+    # or the request fails we still report the DB recovery; the cleanup
+    # workflow will sweep it later.
+    if zombies_recovered:
+        try:
+            async with GitHubClient(api_config) as gh:
+                for issue_number in zombies_recovered:
+                    try:
+                        await gh.remove_label(issue_number, AGENT_START_LABEL)
+                    except Exception as e:
+                        log.warning(
+                            "pollback_zombie_label_remove_failed",
+                            issue=issue_number,
+                            error=str(e),
+                        )
+        except Exception as e:
+            log.warning("pollback_zombie_gh_client_failed", error=str(e))
 
     # Emit structured events for the new reconciliations so that ``aborted``
     # / ``timeout`` transitions are auditable from the events table (this was
@@ -429,6 +551,17 @@ async def run_pollback(settings: Settings) -> PollbackResult:
             },
             module=__name__,
         )
+    for issue_number in zombies_recovered:
+        insert_event(
+            settings.paths.db_path,
+            level="info",
+            event="zombie_batch_recovered",
+            attrs={
+                "issue_number": issue_number,
+                "recovery": "batch reset to pending; agent:start label removed",
+            },
+            module=__name__,
+        )
 
     log.info(
         "pollback_completed",
@@ -436,6 +569,7 @@ async def run_pollback(settings: Settings) -> PollbackResult:
         implementers_completed=len(implementer_completed),
         batches_merged=len(merged_pairs),
         runs_timed_out=len(runs_timed_out),
+        zombies_recovered=len(zombies_recovered),
     )
     return PollbackResult(
         reviews_completed=review_result.reviews_completed,
@@ -443,4 +577,5 @@ async def run_pollback(settings: Settings) -> PollbackResult:
         batches_merged=merged_pairs,
         implementers_completed=implementer_completed,
         runs_timed_out=runs_timed_out,
+        zombies_recovered=zombies_recovered,
     )
