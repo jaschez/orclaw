@@ -72,6 +72,19 @@ class TestPickVerdictLabel:
         labels = frozenset({"review:approved", "review:needs-changes"})
         assert _pick_verdict_label(labels) == "review:needs-changes"
 
+    def test_requires_human_review_recognised_as_terminal(self) -> None:
+        # The reviewer agent sometimes only applies `requires-human-review`
+        # without the matching `review:hard-block`. Pollback must still
+        # treat that as a terminal verdict so the run doesn't sit queued
+        # for 2h until the reaper kills it.
+        assert _pick_verdict_label(frozenset({"requires-human-review"})) == "requires-human-review"
+
+    def test_hard_block_wins_over_requires_human_review(self) -> None:
+        # If both signals are present, the explicit review:* label wins
+        # (it's the one the prompt is supposed to apply).
+        labels = frozenset({"requires-human-review", "review:hard-block"})
+        assert _pick_verdict_label(labels) == "review:hard-block"
+
 
 # --- complete_reviewer_runs -----------------------------------------------
 
@@ -127,6 +140,32 @@ class TestCompleteReviewerRuns:
         assert result.reviews_completed == [(201, "hard_block")]
         with connect(db_path, read_only=True) as conn:
             run_row = conn.execute("SELECT status FROM runs WHERE id = ?", ("rev-2",)).fetchone()
+            assert run_row["status"] == RunStatus.FAILED.value
+
+    def test_marks_run_failed_on_requires_human_review(self, tmp_data_dir: Path) -> None:
+        # The reviewer agent escalates without a `review:*` prefix sometimes
+        # label. Pollback should still close the run as a hard-block — same effect as `review:hard-block` — so the cap
+        # gets freed promptly.
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        with connect(db_path) as conn:
+            create_run(
+                conn,
+                run_id="rev-rhr",
+                agent="reviewer",
+                model="sonnet",
+                pr_number=210,
+            )
+
+        pr = _pr(number=210, labels=("requires-human-review",))
+        with connect(db_path) as conn:
+            result = complete_reviewer_runs(conn, [pr])
+
+        assert result.reviews_completed == [(210, "hard_block")]
+        with connect(db_path, read_only=True) as conn:
+            run_row = conn.execute(
+                "SELECT status FROM runs WHERE id = ?", ("rev-rhr",)
+            ).fetchone()
             assert run_row["status"] == RunStatus.FAILED.value
 
     def test_idempotent_when_reviews_row_exists(self, tmp_data_dir: Path) -> None:
@@ -245,15 +284,11 @@ class TestMarkMergedBatches:
 
 
 class TestCompleteImplementerRuns:
-    def test_marks_implementer_success_when_pr_closes_issue(
-        self, tmp_data_dir: Path
-    ) -> None:
+    def test_marks_implementer_success_when_pr_closes_issue(self, tmp_data_dir: Path) -> None:
         db_path = tmp_data_dir / "engine.db"
         init_db(db_path)
         with connect(db_path) as conn:
-            create_run(
-                conn, run_id="impl-1", agent="implementer", model="sonnet", issue_number=42
-            )
+            create_run(conn, run_id="impl-1", agent="implementer", model="sonnet", issue_number=42)
 
         pr = _pr(number=500, closing=(42,))
         with connect(db_path) as conn:
@@ -268,13 +303,63 @@ class TestCompleteImplementerRuns:
             assert row["finished_at"] is not None
             assert row["pr_number"] == 500  # back-filled from PR
 
+    def test_back_fills_batch_pr_number(self, tmp_data_dir: Path) -> None:
+        # When the implementer finishes by opening a PR, pollback must
+        # propagate the PR number to the batch row so the dashboard can
+        # link batch → PR before the merge happens. Without this the
+        # dashboard shows in_progress batches with no PR for hours.
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        with connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO batches (layer, issue_number, status) VALUES (?, ?, ?)",
+                (0, 77, BatchStatus.IN_PROGRESS.value),
+            )
+            create_run(conn, run_id="impl-77", agent="implementer", model="sonnet", issue_number=77)
+
+        pr = _pr(number=420, closing=(77,))
+        with connect(db_path) as conn:
+            complete_implementer_runs(conn, [pr])
+
+        with connect(db_path, read_only=True) as conn:
+            batch = conn.execute(
+                "SELECT pr_number, status FROM batches WHERE issue_number = 77"
+            ).fetchone()
+            assert batch["pr_number"] == 420
+            # Status is still in_progress — only mark_merged_batches moves
+            # batches to 'merged'. pr_number alone is a denormalised hint
+            # for the dashboard, not a state transition.
+            assert batch["status"] == BatchStatus.IN_PROGRESS.value
+
+    def test_does_not_overwrite_existing_batch_pr_number(self, tmp_data_dir: Path) -> None:
+        # If a batch already has a pr_number (e.g., from an earlier pollback
+        # pass), a second implementer run for the same issue must NOT
+        # clobber it. Conservative — we only back-fill when NULL.
+        db_path = tmp_data_dir / "engine.db"
+        init_db(db_path)
+        with connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO batches (layer, issue_number, status, pr_number) "
+                "VALUES (?, ?, ?, ?)",
+                (0, 78, BatchStatus.IN_PROGRESS.value, 999),
+            )
+            create_run(conn, run_id="impl-78", agent="implementer", model="sonnet", issue_number=78)
+
+        pr = _pr(number=421, closing=(78,))
+        with connect(db_path) as conn:
+            complete_implementer_runs(conn, [pr])
+
+        with connect(db_path, read_only=True) as conn:
+            batch = conn.execute(
+                "SELECT pr_number FROM batches WHERE issue_number = 78"
+            ).fetchone()
+            assert batch["pr_number"] == 999  # untouched
+
     def test_ignores_pr_without_closing_issues(self, tmp_data_dir: Path) -> None:
         db_path = tmp_data_dir / "engine.db"
         init_db(db_path)
         with connect(db_path) as conn:
-            create_run(
-                conn, run_id="impl-2", agent="implementer", model="sonnet", issue_number=99
-            )
+            create_run(conn, run_id="impl-2", agent="implementer", model="sonnet", issue_number=99)
 
         pr = _pr(number=501, closing=())  # PR opens for the issue but doesn't close it
         with connect(db_path) as conn:
@@ -282,9 +367,7 @@ class TestCompleteImplementerRuns:
 
         assert completed == []
         with connect(db_path, read_only=True) as conn:
-            row = conn.execute(
-                "SELECT status FROM runs WHERE id = 'impl-2'"
-            ).fetchone()
+            row = conn.execute("SELECT status FROM runs WHERE id = 'impl-2'").fetchone()
             assert row["status"] == RunStatus.QUEUED.value  # untouched
 
     def test_idempotent_when_run_already_terminal(self, tmp_data_dir: Path) -> None:
@@ -292,12 +375,8 @@ class TestCompleteImplementerRuns:
         db_path = tmp_data_dir / "engine.db"
         init_db(db_path)
         with connect(db_path) as conn:
-            create_run(
-                conn, run_id="impl-3", agent="implementer", model="sonnet", issue_number=7
-            )
-            conn.execute(
-                "UPDATE runs SET status = 'success' WHERE id = 'impl-3'"
-            )
+            create_run(conn, run_id="impl-3", agent="implementer", model="sonnet", issue_number=7)
+            conn.execute("UPDATE runs SET status = 'success' WHERE id = 'impl-3'")
 
         pr = _pr(number=502, closing=(7,))
         with connect(db_path) as conn:
@@ -305,18 +384,12 @@ class TestCompleteImplementerRuns:
 
         assert completed == []
 
-    def test_multi_closer_pr_closes_multiple_implementers(
-        self, tmp_data_dir: Path
-    ) -> None:
+    def test_multi_closer_pr_closes_multiple_implementers(self, tmp_data_dir: Path) -> None:
         db_path = tmp_data_dir / "engine.db"
         init_db(db_path)
         with connect(db_path) as conn:
-            create_run(
-                conn, run_id="impl-a", agent="implementer", model="sonnet", issue_number=10
-            )
-            create_run(
-                conn, run_id="impl-b", agent="implementer", model="sonnet", issue_number=11
-            )
+            create_run(conn, run_id="impl-a", agent="implementer", model="sonnet", issue_number=10)
+            create_run(conn, run_id="impl-b", agent="implementer", model="sonnet", issue_number=11)
 
         pr = _pr(number=600, closing=(10, 11))
         with connect(db_path) as conn:
@@ -348,12 +421,9 @@ class TestReapStaleQueuedRuns:
                     ("hot", "reviewer", "sonnet", "running", "3h", None),
                 ],
             )
+            conn.execute("UPDATE runs SET started_at = datetime('now') WHERE started_at = 'now'")
             conn.execute(
-                "UPDATE runs SET started_at = datetime('now') WHERE started_at = 'now'"
-            )
-            conn.execute(
-                "UPDATE runs SET started_at = datetime('now', '-3 hours') "
-                "WHERE started_at = '3h'"
+                "UPDATE runs SET started_at = datetime('now', '-3 hours') WHERE started_at = '3h'"
             )
 
             reaped = reap_stale_queued_runs(conn, max_age_hours=2)
@@ -375,7 +445,5 @@ class TestReapStaleQueuedRuns:
         db_path = tmp_data_dir / "engine.db"
         init_db(db_path)
         with connect(db_path) as conn:
-            create_run(
-                conn, run_id="fresh", agent="implementer", model="sonnet", issue_number=1
-            )
+            create_run(conn, run_id="fresh", agent="implementer", model="sonnet", issue_number=1)
             assert reap_stale_queued_runs(conn) == []

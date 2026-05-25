@@ -48,11 +48,20 @@ log = get_logger(__name__)
 #: Map from reviewer-applied label to the verdict + final run status.
 #: ``review:hard-block`` marks the run as ``failed`` because the PR is not
 #: mergeable without human escalation.
+#:
+#: ``requires-human-review`` is included as a second hard-block synonym. The
+#: reviewer agent is *supposed* to apply ``review:hard-block`` whenever it
+#: escalates, but in practice it sometimes only applies
+#: ``requires-human-review`` (the operator-visible label that auto-merge
+#: respects). Without this entry the reviewer run sits in ``queued`` until
+#: the 2h reaper kills it — saturating the concurrency cap with a zombie
+#: that's already decided. Treat both labels as the same terminal verdict.
 LABEL_TO_VERDICT: dict[str, tuple[ReviewVerdict, RunStatus]] = {
     "review:approved": (ReviewVerdict.APPROVED, RunStatus.SUCCESS),
     "review:minor-fixes-applied": (ReviewVerdict.MINOR_FIXES_APPLIED, RunStatus.SUCCESS),
     "review:needs-changes": (ReviewVerdict.NEEDS_CHANGES, RunStatus.SUCCESS),
     "review:hard-block": (ReviewVerdict.HARD_BLOCK, RunStatus.FAILED),
+    "requires-human-review": (ReviewVerdict.HARD_BLOCK, RunStatus.FAILED),
 }
 
 
@@ -90,16 +99,20 @@ class PollbackResult:
 
 
 def _pick_verdict_label(pr_labels: frozenset[str]) -> str | None:
-    """Return the first ``review:*`` terminal label found on a PR (or None).
+    """Return the first terminal label found on a PR (or None).
 
     A PR should normally carry exactly one terminal label, but if multiple
     are set (e.g., the reviewer flipped its mind across runs) we prefer
-    the most-definitive: hard-block > needs-changes > minor-fixes-applied
-    > approved. That ordering avoids "approved" wins over a later
-    "needs-changes" sneaking in.
+    the most-definitive: hard-block > requires-human-review > needs-changes
+    > minor-fixes-applied > approved. That ordering avoids "approved"
+    winning over a later "needs-changes" sneaking in.
+
+    ``requires-human-review`` is treated as an equivalent hard-block (see
+    LABEL_TO_VERDICT docstring for why).
     """
     priority = [
         "review:hard-block",
+        "requires-human-review",
         "review:needs-changes",
         "review:minor-fixes-applied",
         "review:approved",
@@ -199,6 +212,12 @@ def complete_implementer_runs(
     GitHub's ``closingIssuesReferences``). For each such PR, we find the
     matching queued/running implementer run and close it.
 
+    Side-effect: also back-fills ``batches.pr_number`` for the batch tied
+    to the same issue (only when it's still ``NULL``), so the dashboard
+    can link a still-open PR to its batch row without waiting for merge.
+    Without this the dashboard shows the batch as ``in_progress`` with no
+    PR link until ``mark_batch_merged`` finally fires post-merge.
+
     Pure-DB function. Returns ``(run_id, issue_number, pr_number)`` for each
     transitioned run so the caller can emit structured events.
     """
@@ -219,6 +238,11 @@ def complete_implementer_runs(
                     "UPDATE runs SET status = ?, finished_at = datetime('now'), "
                     "pr_number = COALESCE(pr_number, ?) WHERE id = ?",
                     (RunStatus.SUCCESS.value, pr.number, run_row["id"]),
+                )
+                conn.execute(
+                    "UPDATE batches SET pr_number = ?, updated_at = datetime('now') "
+                    "WHERE issue_number = ? AND pr_number IS NULL",
+                    (pr.number, issue_number),
                 )
                 completed.append((run_row["id"], issue_number, pr.number))
             except Exception as e:
@@ -377,9 +401,9 @@ async def run_pollback(settings: Settings) -> PollbackResult:
         runs_timed_out = reap_stale_queued_runs(conn)
         _set_cursor(conn, datetime.now(UTC))
 
-    # Emit structured events for the new reconciliations so that
-    # ``timeout`` / ``success`` transitions are auditable from the events
-    # table (otherwise implementer outcomes are invisible to operators).
+    # Emit structured events for the new reconciliations so that ``aborted``
+    # / ``timeout`` transitions are auditable from the events table (this was
+    # the gap behind the 2026-05-23 silent-abort investigation).
     for run_id, issue_number, pr_number in implementer_completed:
         insert_event(
             settings.paths.db_path,

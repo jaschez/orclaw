@@ -35,6 +35,23 @@ class TestParseBlockedBy:
         body = "   Blocked by  #88  "
         assert parse_blocked_by(body) == frozenset({88})
 
+    def test_tolerates_parenthetical_context(self) -> None:
+        # Real-world issue bodies often append a (why) annotation after the
+        # number. Previously the regex required \s*$ after the digits and
+        # silently dropped every such line, causing the planner to flatten
+        # every issue into layer 0 and dispatch dependents in parallel
+        # with their pre-reqs.
+        body = "- Blocked by #194 (necesita organization_id y embed_allowed_domains)"
+        assert parse_blocked_by(body) == frozenset({194})
+
+    def test_tolerates_trailing_period(self) -> None:
+        body = "- Blocked by #201."
+        assert parse_blocked_by(body) == frozenset({201})
+
+    def test_tolerates_trailing_comment(self) -> None:
+        body = "- Blocked by #88 — fix shipping first"
+        assert parse_blocked_by(body) == frozenset({88})
+
     def test_ignores_inline_mentions(self) -> None:
         # "Blocked by #88" must be on its own line. Inline mentions like
         # "see Blocked by #88 below" should not match.

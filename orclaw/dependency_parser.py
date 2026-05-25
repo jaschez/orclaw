@@ -10,6 +10,12 @@ Regex tolerates:
 - Case-insensitive ``Blocked by`` (also accepts ``blocked by``, ``BLOCKED BY``)
 - Optional dash/bullet prefix (``- Blocked by #88``)
 - Markdown list item formatting
+- Trailing punctuation or parenthetical context after the issue number
+  (``- Blocked by #194 (needs organization_id)``, ``- Blocked by #201.``).
+  Previously the regex required ``\\s*$`` after the number which made it
+  silently drop EVERY line that had any annotation — leading to the planner
+  flattening everything into layer 0 and dispatching dependents before
+  pre-reqs merged.
 """
 
 from __future__ import annotations
@@ -20,9 +26,13 @@ import re
 #   Blocked by #88
 #   - Blocked by #142
 #   * blocked by  #99
-# Captures the issue number.
+#   - Blocked by #194 (needs organization_id and embed_allowed_domains)
+#   - Blocked by #201.
+# Captures the issue number. Word boundary after the digits so trailing
+# punctuation, parenthetical context, or other commentary on the same line
+# doesn't break the match.
 _BLOCKED_BY_RE = re.compile(
-    r"(?im)^[\s\-\*]*blocked\s+by\s+#(\d+)\s*$",
+    r"(?im)^[\s\-\*]*blocked\s+by\s+#(\d+)\b",
 )
 
 
