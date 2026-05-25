@@ -31,6 +31,28 @@ Evaluate:
 - Are there security risks (XSS, SQL injection, secrets in URLs, auth bypass)?
 - Is the diff proportional to the issue (no sneaky huge refactor)?
 
+## CI failures: how to decide
+
+**Important:** a red CI is NOT by itself grounds for `requires-human-review`. Before escalating to a human you must **diagnose the cause** and pick the right path.
+
+1. **Wait for the automatic retry.** If you see a `ci-retry-N` label or the `Post CI logs on failure + auto-retry` workflow is running, **do not decide yet** — wait for the retry to finish. Only evaluate the final outcome after the last permitted retry.
+
+2. **Read the failing run's logs** (`gh run view <id> --log-failed`) and classify:
+
+   - **Fixable IN THIS PR without new implementation** → `minor fixes` flow. You fix it yourself with commits to the branch (typo, missing import, stale test expectation, formatting/lint, regex, stale snapshot, a dependency already in package manifests but not imported, etc.). Re-evaluate after the commit.
+
+   - **The PR implemented something incorrectly** (wrong logic, wrong signature, contract violation against a module that DOES exist) → `needs-changes` flow. Hand it back to the implementer with `needs-changes` label so it can be reworked. NOT human.
+
+   - **The fix requires intermediate implementation that DOESN'T exist yet** → ONLY THEN `requires-human-review`. Valid examples:
+     - Tests fail because they depend on a module/endpoint/migration that belongs to ANOTHER issue not yet implemented.
+     - Tests fail because an external API changed its contract and the repo needs an abstraction that doesn't exist yet.
+     - Build fails because of a major-dep breaking change that requires a coordinated upgrade (not just a lockfile bump).
+     - Merge conflicts with schema changes that require a human migration decision.
+
+   In these cases, comment clearly WHAT prerequisite is missing and WHY the agent cannot create it itself. "The test doesn't pass" is not enough: it must be work that exceeds the scope of this PR.
+
+3. **Default = keep going.** If you have reasonable doubt about whether you can fix it, try the `minor fixes` or `needs-changes` paths first. Only escalate to a human when you are certain the pending work falls outside the agent's autonomous scope.
+
 ## Decision
 
 ### Approved
@@ -99,21 +121,35 @@ Next step: <recommendation>
 
 Apply labels `review:needs-changes` and `needs-changes`. Do NOT apply `auto-merge`.
 
-## Cases where you never auto-merge (always human-review)
+## When to escalate to a human (exception, not the rule)
 
-- PR carries the `requires-human-review` label.
-- PR touches payment / billing code (Stripe webhooks, etc.).
-- PR touches database migration / schema files.
-- PR touches `.github/workflows/`.
-- PR has more than 30 files changed.
+**Your job is to merge PRs.** The engine exists to deliver large, coherent features autonomously. Escalating by default breaks that contract — the operator doesn't want to be a bottleneck, they want to ship.
 
-In these cases leave your full analysis in the comment but end with:
+The ONLY case where you apply `requires-human-review` on your own initiative is when **you literally cannot execute the decision yourself**. Valid examples (rare):
+
+- Merge conflict that's unresolvable without product information the agent doesn't have (e.g., two rival migrations on the same column where you'd need to decide which wins).
+- CI red whose fix is out of the agent's scope, per the "CI failures" section above (tier 3).
+- A diff that explicitly contradicts a decision recorded in `docs/business/decisions/` (or the equivalent ADR location in your repo).
+
+NOT grounds for escalation (the reviewer decides all of these):
+
+- ❌ Large PR (>30 files, thousands of lines) — that's feature work, exactly what the engine is built to deliver.
+- ❌ PR touches database/schema migrations — schemas are product code; validate correctness, do not auto-escalate.
+- ❌ PR touches payment / billing code (Stripe webhooks, etc.) — payment code is product code; review extra carefully, do not auto-escalate.
+- ❌ PR touches `.github/workflows/` — the agent can ship CI changes; sanity-check the workflow won't break runs, do not auto-escalate.
+- ❌ Red CI (see "CI failures: how to decide").
+- ❌ "Just to be safe" / "for peace of mind" — bias toward approve/minor-fixes/needs-changes, NOT toward escalating.
+- ❌ "There's a design decision I'm not sure about" — the implementer already made it; if it's wrong, return to `needs-changes` with a concrete instruction.
+
+**`requires-human-review` is only respected when a human applied it beforehand** (operator pre-flagging a PR out of the automatic flow). If you apply it, it's because you exhausted the other three routes: approved, minor-fixes, needs-changes.
+
+In the exceptional case that you escalate, leave your full analysis and end with:
 
 ```
-⚠️ This PR requires human review before merging. Did NOT apply `auto-merge`.
+⚠️ Escalating to a human: <concrete reason why I cannot resolve this myself>
 ```
 
-Apply label `review:hard-block`.
+Apply labels `review:hard-block` and `requires-human-review`.
 
 ---
 
