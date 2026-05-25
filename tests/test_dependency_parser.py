@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from orclaw.dependency_parser import is_blocked_open, parse_blocked_by
+from orclaw.dependency_parser import (
+    find_suspicious_blocked_lines,
+    is_blocked_open,
+    parse_blocked_by,
+)
 
 
 class TestParseBlockedBy:
@@ -54,7 +58,7 @@ class TestParseBlockedBy:
 
     def test_ignores_inline_mentions(self) -> None:
         # "Blocked by #88" must be on its own line. Inline mentions like
-        # "see Blocked by #88 below" should not match.
+        # "see blocked by #88 below" should not match.
         body = "See blocked by #88 elsewhere in the issue."
         assert parse_blocked_by(body) == frozenset()
 
@@ -72,6 +76,53 @@ Adds the coupons table.
 ## OPS relacionadas
 """
         assert parse_blocked_by(body) == frozenset({201, 202})
+
+
+class TestFindSuspiciousBlockedLines:
+    def test_empty_body_returns_empty_list(self) -> None:
+        assert find_suspicious_blocked_lines(None) == []
+        assert find_suspicious_blocked_lines("") == []
+
+    def test_clean_body_returns_empty_list(self) -> None:
+        body = "## Dependencias\n- Blocked by #88\n- Blocked by #142"
+        assert find_suspicious_blocked_lines(body) == []
+
+    def test_flags_placeholder_codename(self) -> None:
+        # The exact bug we hit: specialist writes `#P1` (a codename from
+        # the spec) instead of substituting in the real issue number.
+        # Regex rejects it because the digits are missing; without this
+        # surface, the dep silently vanishes.
+        body = "## Dependencias\n- Blocked by #P1 (provider tier scaffolding)"
+        out = find_suspicious_blocked_lines(body)
+        assert out == ["- Blocked by #P1 (provider tier scaffolding)"]
+
+    def test_flags_missing_hash(self) -> None:
+        body = "Blocked by issue 88"
+        out = find_suspicious_blocked_lines(body)
+        assert out == ["Blocked by issue 88"]
+
+    def test_flags_multiple_offenders_separately(self) -> None:
+        body = (
+            "## Dependencias\n"
+            "- Blocked by #N1 (multi-org schema)\n"
+            "- Blocked by #194 (good one)\n"
+            "- Blocked by #P3 (bulk endpoints)\n"
+        )
+        out = find_suspicious_blocked_lines(body)
+        # #194 line is clean; the two placeholders are suspicious.
+        assert out == [
+            "- Blocked by #N1 (multi-org schema)",
+            "- Blocked by #P3 (bulk endpoints)",
+        ]
+
+    def test_does_not_flag_clean_annotated_lines(self) -> None:
+        # The regex now accepts annotations; clean parses should NOT
+        # be flagged as suspicious.
+        body = (
+            "- Blocked by #194 (needs multi-org schema)\n"
+            "- Blocked by #201."
+        )
+        assert find_suspicious_blocked_lines(body) == []
 
 
 class TestIsBlockedOpen:
