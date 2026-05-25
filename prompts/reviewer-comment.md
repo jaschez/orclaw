@@ -35,9 +35,18 @@ Evaluate:
 
 **Important:** a red CI is NOT by itself grounds for `requires-human-review`. Before escalating to a human you must **diagnose the cause** and pick the right path.
 
-1. **Wait for the automatic retry.** If you see a `ci-retry-N` label or the `Post CI logs on failure + auto-retry` workflow is running, **do not decide yet** — wait for the retry to finish. Only evaluate the final outcome after the last permitted retry.
+1. **Wait for the automatic retry — completely.** The `Post CI logs on failure + auto-retry` workflow retries CI up to **3 times** (progressive labels `ci-retry-1`, `ci-retry-2`, `ci-retry-3`). When all 3 retries are exhausted, that workflow applies the `needs-human` label on its own.
 
-2. **Read the failing run's logs** (`gh run view <id> --log-failed`) and classify:
+   **HARD RULE: do not decide anything until the PR meets ONE of these two conditions:**
+
+   - ✅ CI **green** (every check `success`), or
+   - 🔴 `needs-human` label applied (auto-retry exhausted all 3 attempts).
+
+   If you see `ci-retry-1` or `ci-retry-2` or `ci-retry-3` WITHOUT `needs-human` and WITHOUT a green CI → **the retry loop is still running, do NOT decide**. Wait for the next round. It's fine to post a short comment like "waiting for auto-retry to complete (N/3)" but DO NOT apply `review:hard-block` or `requires-human-review` or `needs-changes` yet.
+
+   Why: each `ci-retry-N` triggers a fresh `@claude` ping that can push a fix and turn CI green. Deciding early throws away that opportunity and forces the human to review a PR that the engine would have repaired itself.
+
+2. **Once the retry IS finished** (CI green or `needs-human` applied), read the last failing run's logs (`gh run view <id> --log-failed`) and classify:
 
    - **Fixable IN THIS PR without new implementation** → `minor fixes` flow. You fix it yourself with commits to the branch (typo, missing import, stale test expectation, formatting/lint, regex, stale snapshot, a dependency already in package manifests but not imported, etc.). Re-evaluate after the commit.
 
