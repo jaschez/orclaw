@@ -35,6 +35,15 @@ _BLOCKED_BY_RE = re.compile(
     r"(?im)^[\s\-\*]*blocked\s+by\s+#(\d+)\b",
 )
 
+# Catches lines that LOOK like a dependency declaration but don't parse —
+# e.g., placeholders the specialist forgot to substitute (``#N1``, ``#P3``),
+# typos (``Blocked by issue 88``), or markdown that hides the ``#`` from us.
+# Anything starting with bullet/whitespace + the word "blocked" that is NOT
+# already a valid match is suspicious.
+_BLOCKED_KEYWORD_RE = re.compile(
+    r"(?im)^[\s\-\*]*blocked\s+by\b.*$",
+)
+
 
 def parse_blocked_by(body: str | None) -> frozenset[int]:
     """Return the set of issue numbers this body is blocked by.
@@ -44,6 +53,32 @@ def parse_blocked_by(body: str | None) -> frozenset[int]:
     if not body:
         return frozenset()
     return frozenset(int(m) for m in _BLOCKED_BY_RE.findall(body))
+
+
+def find_suspicious_blocked_lines(body: str | None) -> list[str]:
+    """Return lines that look like dependency declarations but don't parse.
+
+    Useful for surfacing silent mal-formats in issue bodies — the bug we
+    hit in production was the specialist writing ``Blocked by #P1`` (a
+    placeholder codename instead of a real issue number). The regex
+    correctly rejected those lines, but nothing surfaced the rejection to
+    the operator, so every issue silently ended up with zero deps and the
+    planner flattened the whole graph into layer 0.
+
+    Returns the stripped text of each suspicious line so the caller can
+    log them. Empty list for None / empty / clean bodies.
+    """
+    if not body:
+        return []
+    suspicious: list[str] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not _BLOCKED_KEYWORD_RE.match(line):
+            continue
+        if _BLOCKED_BY_RE.match(line):
+            continue  # parsed cleanly
+        suspicious.append(line)
+    return suspicious
 
 
 def is_blocked_open(

@@ -70,6 +70,14 @@ def build_server() -> FastMCP:
     mcp.tool()(t.propose_engine_change)
     mcp.tool()(t.merge_engine_pr)
 
+    # --- target-repo issue authoring ---
+    # Turn a multi-issue spec .md into real GitHub issues on the target
+    # repo, with codename -> real-number substitution baked in. Removes
+    # the manual "create issues + look up numbers + edit dep refs" loop.
+    from orclaw.spec_issue_creator import create_issues_from_spec
+
+    mcp.tool()(create_issues_from_spec)
+
     return mcp
 
 
