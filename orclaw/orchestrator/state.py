@@ -120,6 +120,12 @@ def set_concurrency_override(conn: sqlite3.Connection, value: int | None) -> Non
     values are rejected — pass 0 to fully pause dispatching instead (the
     orchestrator already has a dedicated paused flag for that, but 0
     works as a soft equivalent).
+
+    Note: the override can only *lower* the effective cap below the config
+    ceiling (``settings.concurrency.max_in_flight``); values above the
+    ceiling are clamped down by :func:`effective_max_in_flight`. The raw
+    value is still stored verbatim so the dashboard can show what was
+    requested vs. what is in effect.
     """
     if value is None:
         conn.execute("DELETE FROM engine_state WHERE key = ?", (_CONCURRENCY_OVERRIDE_KEY,))
@@ -138,15 +144,26 @@ def effective_max_in_flight(
 ) -> int:
     """Single source of truth for the active concurrency cap.
 
-    Resolution order:
-      1. Runtime override (engine_state.max_in_flight_override) if set.
-      2. ``settings.concurrency.max_in_flight`` from config.
+    Resolution:
+      1. Start from ``settings.concurrency.max_in_flight`` (the config
+         ceiling — defaults to 1, a single Claude task at a time).
+      2. If a runtime override (engine_state.max_in_flight_override) is
+         set, it may only **lower** the cap below that ceiling — never
+         raise it above. So ``effective = min(override, settings_default)``.
+
+    Clamping to the ceiling (rather than letting the override win
+    outright) keeps the single-flight guarantee intact: no dashboard edit
+    can accidentally push the engine past the configured parallelism. To
+    run more than one dispatch in parallel, raise ``max_in_flight`` in
+    config — not via the override.
 
     The orchestrator loop AND the dashboard both call this so the number
     shown in the UI matches what the loop will actually use next tick.
     """
     override = get_concurrency_override(conn)
-    return override if override is not None else settings_default
+    if override is None:
+        return settings_default
+    return min(override, settings_default)
 
 
 def last_planner_run(conn: sqlite3.Connection) -> datetime | None:

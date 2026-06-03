@@ -120,7 +120,10 @@ async def get_decision_preview() -> str:
     except Exception as e:
         return f"❌ Tick failed: {e}"
 
+    from orclaw.orchestrator import describe_next_action
+
     lines = [
+        f"**Next action:** {describe_next_action(decision, settings)}",
         f"**Decision:** {'IDLE' if decision.is_idle else 'DISPATCH'}",
         f"**Reason:** {decision.reason}",
         f"**Layer:** {decision.layer_index}",

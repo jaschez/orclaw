@@ -68,6 +68,7 @@ from orclaw.logging import configure_logging, get_logger
 from orclaw.models import BatchStatus
 from orclaw.notifications import post_telegram
 from orclaw.orchestrator import (
+    describe_next_action,
     load_state,
     orchestrator_tick,
     set_paused,
@@ -427,6 +428,7 @@ def orchestrator_tick_cmd(apply_changes: bool, log_level: str | None) -> None:
         f"reason={decision.reason!r} "
         f"run_id={decision.orchestrator_run_id}"
     )
+    console.print(f"[cyan]Next action:[/cyan] {describe_next_action(decision, settings)}")
     if not decision.pollback.is_noop:
         if decision.pollback.reviews_completed:
             console.print("[magenta]Reviews completed (verdicts ingested):[/magenta]")

@@ -14,6 +14,9 @@ Read (no side effects):
   GET  /api/prompts/{name}    → full content of a prompt file
   GET  /api/config            → read-only config view (no secrets)
 
+Webhook (HMAC-authenticated, exclude from Cloudflare Access):
+  POST /webhook/github        → verify signature → coalesced apply tick
+
 Write (each fires Telegram + logs to events):
   POST /api/pause
   POST /api/resume
@@ -38,6 +41,8 @@ the edge). No user-facing auth code here.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -48,6 +53,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from orclaw import webhooks
 from orclaw.config import load_settings
 from orclaw.db import connect
 from orclaw.event_store import query_events as _query_events
@@ -56,6 +62,7 @@ from orclaw.logging import get_logger
 from orclaw.notifications import post_telegram
 from orclaw.orchestrator import (
     active_run_count,
+    describe_next_action,
     effective_max_in_flight,
     get_concurrency_override,
     is_paused,
@@ -362,6 +369,7 @@ def create_app() -> FastAPI:
             "issues_to_dispatch": decision.issues_to_dispatch,
             "prs_to_review": decision.prs_to_review,
             "reason": decision.reason,
+            "next_action": describe_next_action(decision, settings),
             "active_run_count": decision.state.active_run_count,
             "max_in_flight": settings.concurrency.max_in_flight,
         }
@@ -579,9 +587,79 @@ def create_app() -> FastAPI:
             raise HTTPException(500, f"tick failed: {e}") from e
         return {
             "reason": decision.reason,
+            "next_action": describe_next_action(decision, settings),
             "dispatched": len(decision.dispatched),
             "reviewers_dispatched": len(decision.reviewers_dispatched),
         }
+
+    # =====================================================================
+    # GitHub webhook — push instead of poll
+    # =====================================================================
+
+    async def _run_apply_tick() -> None:
+        """Drive one apply-mode tick. Loads settings fresh so a token /
+        config change lands without restarting the dashboard."""
+        s = load_settings(require_secrets=True)
+        await orchestrator_tick(s, apply=True, notify=True)
+
+    # One coalescing runner per app instance: a burst of deliveries
+    # collapses into "run now + at most one trailing run".
+    tick_runner = webhooks.CoalescingTickRunner(_run_apply_tick)
+    # Hold strong refs to background tasks so they aren't GC'd mid-flight.
+    bg_tasks: set[asyncio.Task[None]] = set()
+
+    @app.post("/webhook/github")
+    async def github_webhook(request: Request) -> JSONResponse:
+        """Receive a GitHub webhook delivery and (maybe) trigger a tick.
+
+        Auth is the HMAC signature, NOT Cloudflare Access — this path must
+        be excluded from Access so GitHub can reach it. See
+        ``docs/webhooks.md``.
+        """
+        settings = _settings_or_500()
+        secret = settings.github.webhook_secret
+        if not secret:
+            raise HTTPException(503, "webhooks disabled — set GITHUB_WEBHOOK_SECRET")
+
+        raw = await request.body()
+        signature = request.headers.get("X-Hub-Signature-256")
+        if not webhooks.verify_signature(secret, raw, signature):
+            raise HTTPException(401, "invalid or missing signature")
+
+        event = request.headers.get("X-GitHub-Event", "")
+        delivery = request.headers.get("X-GitHub-Delivery", "")
+        if event == "ping":
+            return JSONResponse({"status": "pong"})
+
+        try:
+            payload = json.loads(raw) if raw else {}
+        except json.JSONDecodeError as e:
+            raise HTTPException(400, f"invalid JSON body: {e}") from e
+
+        if not webhooks.event_should_trigger(event, payload):
+            return JSONResponse({"status": "ignored", "event": event})
+
+        # Fire-and-forget so GitHub gets a fast 2xx; the runner serialises
+        # overlapping deliveries internally.
+        async def _bg() -> None:
+            try:
+                await tick_runner.trigger()
+            except Exception as e:  # pragma: no cover — defensive
+                log.error("webhook_bg_tick_failed", event=event, error=str(e))
+
+        task = asyncio.create_task(_bg())
+        bg_tasks.add(task)
+        task.add_done_callback(bg_tasks.discard)
+        log.info(
+            "webhook_received",
+            gh_event=event,
+            delivery=delivery,
+            action=payload.get("action"),
+        )
+        return JSONResponse(
+            {"status": "scheduled", "event": event, "delivery": delivery},
+            status_code=202,
+        )
 
     @app.post("/api/run_planner")
     async def api_run_planner() -> dict[str, Any]:

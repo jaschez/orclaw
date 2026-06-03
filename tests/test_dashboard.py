@@ -8,6 +8,9 @@ already covered by the github_repo_ops + specialist.tools tests.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import hmac
 from typing import TYPE_CHECKING
 
 import pytest
@@ -314,16 +317,19 @@ class TestConcurrencyCapEndpoint:
         assert body["max_in_flight_override"] is None
         assert body["max_in_flight_default"] == body["max_in_flight"]
 
-    def test_set_override_then_status_reflects_it(self, dashboard_client: TestClient) -> None:
+    def test_override_clamps_to_config_ceiling(self, dashboard_client: TestClient) -> None:
+        # Single-flight guarantee: the override can only LOWER the effective
+        # cap below the config ceiling (default max_in_flight = 1), never
+        # raise it above. The raw value is still stored for display.
         r = dashboard_client.post("/api/concurrency_cap", json={"value": 7})
         assert r.status_code == 200
         body = r.json()
-        assert body["override"] == 7
-        assert body["effective"] == 7
+        assert body["override"] == 7  # raw request preserved
+        assert body["effective"] == 1  # clamped to the ceiling
 
         st = dashboard_client.get("/api/status").json()
         assert st["max_in_flight_override"] == 7
-        assert st["max_in_flight"] == 7  # effective wins
+        assert st["max_in_flight"] == 1  # effective (clamped) wins
 
     def test_clear_override_via_null(self, dashboard_client: TestClient) -> None:
         dashboard_client.post("/api/concurrency_cap", json={"value": 3})
@@ -423,6 +429,161 @@ class TestTimersEndpoints:
         body = dashboard_client.get("/api/timers/orclaw-orchestrator.timer").json()
         assert body["is_overridden"] is False
         assert "OnCalendar=daily" not in body["content"]
+
+
+# =========================================================================
+# Decision preview — "next action"
+# =========================================================================
+
+
+def _fake_decision():
+    """A minimal OrchestratorDecision that says 'review PR #7 next'."""
+    from orclaw.orchestrator.loop import OrchestratorDecision
+    from orclaw.orchestrator.state import BatchSnapshot, OrchestratorState
+
+    state = OrchestratorState(
+        paused=False,
+        last_planner_run=None,
+        batches=BatchSnapshot(
+            layers=[],
+            status_by_issue={},
+            issues_pending=frozenset(),
+            issues_in_progress=frozenset(),
+            issues_merged=frozenset(),
+            issues_failed=frozenset(),
+            issues_skipped=frozenset(),
+        ),
+        active_run_count=0,
+        effective_max_in_flight=1,
+    )
+    return OrchestratorDecision(
+        layer_index=-1,
+        issues_to_dispatch=[],
+        reason="test",
+        state=state,
+        prs_to_review=[7],
+    )
+
+
+class TestDecisionPreviewNextAction:
+    def test_preview_includes_next_action(
+        self, dashboard_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _fake_tick(*args, **kwargs):
+            return _fake_decision()
+
+        # Avoid the real GitHub fetch the tick would do.
+        monkeypatch.setattr("orclaw.dashboard.app.orchestrator_tick", _fake_tick)
+        body = dashboard_client.get("/api/decision_preview").json()
+        assert body["next_action"] == "Review PR #7"
+
+
+# =========================================================================
+# GitHub webhook endpoint
+# =========================================================================
+
+
+@pytest.fixture()
+def webhook_secret() -> str:
+    return "test-webhook-secret"
+
+
+@pytest.fixture()
+def webhook_client(
+    tmp_data_dir: Path,
+    settings,
+    webhook_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Dashboard client whose settings carry a webhook secret, with the
+    apply tick stubbed out so deliveries never touch GitHub."""
+    init_db(tmp_data_dir / "engine.db")
+    wh_settings = dataclasses.replace(
+        settings,
+        github=dataclasses.replace(settings.github, webhook_secret=webhook_secret),
+    )
+
+    monkeypatch.setattr("orclaw.dashboard.app.load_settings", lambda *a, **k: wh_settings)
+
+    async def _noop_tick(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("orclaw.dashboard.app.orchestrator_tick", _noop_tick)
+
+    from orclaw.dashboard.app import create_app
+
+    return TestClient(create_app())
+
+
+def _sign(secret: str, payload: bytes) -> str:
+    return "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+
+
+class TestGithubWebhook:
+    def test_disabled_without_secret_returns_503(self, dashboard_client: TestClient) -> None:
+        # The default `settings` fixture has no webhook secret.
+        r = dashboard_client.post(
+            "/webhook/github",
+            content=b"{}",
+            headers={"X-GitHub-Event": "push"},
+        )
+        assert r.status_code == 503
+
+    def test_bad_signature_rejected(
+        self, webhook_client: TestClient
+    ) -> None:
+        r = webhook_client.post(
+            "/webhook/github",
+            content=b'{"action": "created"}',
+            headers={
+                "X-GitHub-Event": "issue_comment",
+                "X-Hub-Signature-256": "sha256=deadbeef",
+            },
+        )
+        assert r.status_code == 401
+
+    def test_ping_pongs(self, webhook_client: TestClient, webhook_secret: str) -> None:
+        body = b'{"zen": "hello"}'
+        r = webhook_client.post(
+            "/webhook/github",
+            content=body,
+            headers={
+                "X-GitHub-Event": "ping",
+                "X-Hub-Signature-256": _sign(webhook_secret, body),
+            },
+        )
+        assert r.status_code == 200
+        assert r.json()["status"] == "pong"
+
+    def test_irrelevant_event_ignored(
+        self, webhook_client: TestClient, webhook_secret: str
+    ) -> None:
+        body = b'{"action": "assigned"}'
+        r = webhook_client.post(
+            "/webhook/github",
+            content=body,
+            headers={
+                "X-GitHub-Event": "pull_request",
+                "X-Hub-Signature-256": _sign(webhook_secret, body),
+            },
+        )
+        assert r.status_code == 200
+        assert r.json()["status"] == "ignored"
+
+    def test_relevant_event_scheduled(
+        self, webhook_client: TestClient, webhook_secret: str
+    ) -> None:
+        body = b'{"action": "created"}'
+        r = webhook_client.post(
+            "/webhook/github",
+            content=body,
+            headers={
+                "X-GitHub-Event": "issue_comment",
+                "X-Hub-Signature-256": _sign(webhook_secret, body),
+            },
+        )
+        assert r.status_code == 202
+        assert r.json()["status"] == "scheduled"
 
     def test_delete_user_created_removes(self, dashboard_client: TestClient) -> None:
         dashboard_client.post(

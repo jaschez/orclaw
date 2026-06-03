@@ -19,7 +19,11 @@ from orclaw.orchestrator.dispatcher import (
     render_implementer_prompt,
     render_reviewer_prompt,
 )
-from orclaw.orchestrator.loop import OrchestratorDecision, orchestrator_tick
+from orclaw.orchestrator.loop import (
+    OrchestratorDecision,
+    describe_next_action,
+    orchestrator_tick,
+)
 from orclaw.orchestrator.pollback import PollbackResult, run_pollback
 from orclaw.orchestrator.state import (
     BatchSnapshot,
@@ -45,6 +49,7 @@ __all__ = [
     "ReviewerDispatchResult",
     "active_run_count",
     "create_run",
+    "describe_next_action",
     "dispatch_implementer",
     "dispatch_reviewer",
     "effective_max_in_flight",

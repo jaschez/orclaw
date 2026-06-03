@@ -19,10 +19,11 @@ self-hosted runner you own, paid by your Claude Pro plan.
   │   reads issues, parses "Depends on #N" edges, runs Kahn         │
   │   topological sort, persists layered batches to SQLite.         │
   ├─────────────────────────────────────────────────────────────────┤
-  │  ORCHESTRATOR    (every 30 seconds)                             │
+  │  ORCHESTRATOR    (webhook-driven; polling every 30s as fallback)│
   │   reviewer pass: open PRs needing review → @claude review       │
   │   implementer pass: next layer + within cap → @claude implement │
   │   single GitHub fetch reused across both passes.                │
+  │   cap defaults to 1 — a single Claude task at a time.           │
   ├─────────────────────────────────────────────────────────────────┤
   │  POLLBACK        (top of every orchestrator tick)               │
   │   read review:* labels → mark reviewer runs complete            │
@@ -129,6 +130,24 @@ at the edge; CF Access for SaaS does OAuth + dynamic client
 registration for the MCP. The dashboard + MCP code never see a token
 or a session — they just trust the request. Less code, smaller blast
 radius.
+
+## Event ingestion: webhooks + polling
+
+The orchestrator reacts to GitHub **webhooks** (`/webhook/github` on the
+dashboard, HMAC-authenticated) for low latency, and keeps **polling** as
+a reconciliation fallback for any delivery that gets dropped. A burst of
+deliveries is coalesced into a single trailing tick. See
+[`webhooks.md`](webhooks.md).
+
+## Concurrency: one Claude task at a time
+
+The effective concurrency cap defaults to **1** — a single in-flight
+`@claude` dispatch. On one Pro/Max seat the seat's 5h window is the real
+bottleneck, not the orchestrator, so single-flight is the safe default.
+`settings.concurrency.max_in_flight` is a **hard ceiling**: the dashboard
+runtime override can only dial the cap *down*, never above it. Raise the
+ceiling in config only when you have the quota (e.g. multiple seats) to
+run more than one dispatch in parallel.
 
 ## What's intentionally NOT here
 

@@ -11,7 +11,16 @@ warning_at_pct = 70
 hard_stop_at_pct = 95
 
 [concurrency]
-# How many implementers can run in parallel, by budget tier.
+# Hard ceiling on simultaneous @claude dispatches in flight. Defaults to 1
+# — a single Claude task at a time, the safe choice on one Pro/Max seat
+# (the seat's 5h window is the real bottleneck, not the orchestrator).
+# The dashboard "tuning" override can only dial this DOWN, never above it.
+max_in_flight = 1
+default_in_flight = 1
+
+# --- Aspirational budget-tiered caps (not yet wired to the loop) ---------
+# How many implementers could run in parallel, by budget tier, once the
+# engine grows multiple seats / an API overflow lane.
 # "healthy" = monthly spend < 50% of target
 # "lean" = 50-80%
 # "critical" = > 80%
