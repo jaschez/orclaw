@@ -94,6 +94,44 @@ class OrchestratorDecision:
         return bool(self.dispatched) or bool(self.reviewers_dispatched)
 
 
+def describe_next_action(decision: OrchestratorDecision, settings: Settings) -> str:
+    """One-line, human-readable description of the *single* action the next
+    apply-mode tick will take — the thing the UI shows as "next action".
+
+    Mirrors the loop's own ordering exactly so the preview never lies:
+
+    1. Paused → nothing happens.
+    2. No free slot (in-flight ≥ cap) → the engine waits for the current
+       task to finish before doing anything else.
+    3. Reviewer pass runs first (it frees slots), so a PR awaiting review
+       outranks a fresh implement.
+    4. Otherwise the next implementer issue in the active layer.
+    5. Nothing ready → idle.
+
+    Pure: derives everything from ``decision`` + ``settings``, no I/O.
+    """
+    state = decision.state
+    cap = state.effective_max_in_flight or settings.concurrency.max_in_flight
+
+    if state.paused:
+        return "Paused — no dispatch until resumed"
+
+    if state.active_run_count >= cap:
+        suffix = "task" if state.active_run_count == 1 else "tasks"
+        return f"Waiting — {state.active_run_count} {suffix} in flight (cap {cap})"
+
+    if decision.prs_to_review:
+        return f"Review PR #{decision.prs_to_review[0]}"
+
+    if decision.issues_to_dispatch:
+        return (
+            f"Implement issue #{decision.issues_to_dispatch[0]} "
+            f"(layer {decision.layer_index})"
+        )
+
+    return "Idle — nothing ready to dispatch"
+
+
 def select_prs_needing_review(prs: list[PullRequest]) -> list[PullRequest]:
     """Pure: from a list of open PRs, pick the ones the reviewer hasn't seen.
 

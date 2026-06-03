@@ -35,6 +35,7 @@ from orclaw.orchestrator import (
     orchestrator_tick,
     set_paused,
 )
+from orclaw.spec_issue_creator import create_issues_from_spec
 from orclaw.summary import build_summary, format_summary_telegram
 
 log = get_logger(__name__)
@@ -120,7 +121,10 @@ async def get_decision_preview() -> str:
     except Exception as e:
         return f"❌ Tick failed: {e}"
 
+    from orclaw.orchestrator import describe_next_action
+
     lines = [
+        f"**Next action:** {describe_next_action(decision, settings)}",
         f"**Decision:** {'IDLE' if decision.is_idle else 'DISPATCH'}",
         f"**Reason:** {decision.reason}",
         f"**Layer:** {decision.layer_index}",
@@ -897,6 +901,8 @@ def all_tools() -> dict[str, object]:
         "require_human_review": require_human_review,
         "force_review": force_review,
         "send_daily_summary": send_daily_summary,
+        # target-repo issue authoring
+        "create_issues_from_spec": create_issues_from_spec,
     }
 
 

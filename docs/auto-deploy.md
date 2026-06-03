@@ -23,6 +23,8 @@ orclaw-deploy.sh
    ├─ git pull --ff-only
    ├─ pip install -e '.[specialist]'      (catches new deps)
    ├─ cp infra/systemd/* /etc/systemd/    (sync units)
+   ├─ orclaw db migrate --if-exists       (additive schema migrations)
+   │     └─ fails → roll back to prev SHA
    ├─ daemon-reload
    ├─ try-restart orclaw-* units            (graceful restart)
    ├─ orclaw doctor                  (smoke test)

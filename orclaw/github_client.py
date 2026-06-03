@@ -103,6 +103,11 @@ class GitHubClient:
             raise GitHubError("GitHubClient used outside its async context manager.")
         return self._client
 
+    @property
+    def repo(self) -> str:
+        """The ``owner/name`` this client targets (for repo-tagging writes)."""
+        return self._config.repo
+
     # --- Issues ------------------------------------------------------------
 
     async def get_issue(self, number: int) -> Issue:

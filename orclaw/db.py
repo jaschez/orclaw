@@ -70,10 +70,11 @@ def connect(db_path: Path, *, read_only: bool = False) -> Iterator[sqlite3.Conne
 
 
 def init_db(db_path: Path, *, schema_path: Path = SCHEMA_PATH) -> None:
-    """Create the database file and apply the schema.
+    """Create the database file and apply the schema + migrations.
 
     Idempotent: running twice on an existing DB is a no-op because every
-    DDL statement in :data:`SCHEMA_PATH` uses ``IF NOT EXISTS``.
+    DDL statement in :data:`SCHEMA_PATH` uses ``IF NOT EXISTS`` and
+    :func:`apply_migrations` only ever adds what's missing.
     """
     if not schema_path.is_file():
         raise DatabaseError(f"Schema file not found at {schema_path}")
@@ -83,7 +84,68 @@ def init_db(db_path: Path, *, schema_path: Path = SCHEMA_PATH) -> None:
     schema_sql = schema_path.read_text()
     with connect(db_path) as conn:
         conn.executescript(schema_sql)
+        apply_migrations(conn)
         log.info("db_initialised", path=str(db_path), schema=str(schema_path))
+
+
+# --- Migrations ------------------------------------------------------------
+
+#: Tables that carry the multi-repo ``repo`` dimension (Phase 1).
+_REPO_TABLES = ("batches", "runs", "reviews")
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Column names of ``table`` (empty set if the table doesn't exist)."""
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def apply_migrations(conn: sqlite3.Connection) -> None:
+    """Bring an existing database up to the current schema, additively.
+
+    ``CREATE TABLE IF NOT EXISTS`` in the schema file never alters an
+    existing table, so column additions live here. Safe to run on every
+    init: each step checks before it acts.
+
+    Phase 1 (multi-repo foundation):
+      - add a ``repo`` column to batches/runs/reviews (default ''),
+      - swap the batches active-uniqueness index from ``(issue_number)``
+        to ``(repo, issue_number)`` so two repos can share issue numbers,
+      - add the ``(repo, status)`` / ``(repo)`` helper indexes.
+    """
+    for table in _REPO_TABLES:
+        cols = _columns(conn, table)
+        if cols and "repo" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
+            log.info("db_migration_applied", change="add_repo_column", table=table)
+
+    # Replace the legacy single-repo unique index with the composite one.
+    conn.execute("DROP INDEX IF EXISTS idx_batches_issue_active")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_batches_repo_issue_active "
+        "ON batches(repo, issue_number) WHERE status != 'failed' AND status != 'skipped'"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_batches_repo_status ON batches(repo, status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_repo ON runs(repo)")
+
+
+def backfill_repo(conn: sqlite3.Connection, repo: str) -> int:
+    """Stamp legacy rows (``repo = ''``) with the given target repo.
+
+    Returns the number of rows updated across all repo-bearing tables.
+    Run once after migrating a single-repo install so its history joins
+    the multi-repo world under the right slug. No-op for ``repo=''``.
+    """
+    if not repo:
+        return 0
+    updated = 0
+    for table in _REPO_TABLES:
+        if "repo" not in _columns(conn, table):
+            continue
+        cur = conn.execute(f"UPDATE {table} SET repo = ? WHERE repo = ''", (repo,))
+        updated += cur.rowcount
+    if updated:
+        log.info("db_backfill_repo", repo=repo, rows=updated)
+    return updated
 
 
 # --- Tiny query helpers used by sprint-2+ code -----------------------------

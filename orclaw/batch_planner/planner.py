@@ -86,6 +86,7 @@ def _upsert_batch(
     issue_number: int,
     layer: int,
     existing: dict[str, object] | None,
+    repo: str = "",
 ) -> str:
     """Insert a pending batch row for this issue, or refresh its layer.
 
@@ -93,11 +94,13 @@ def _upsert_batch(
 
     We never **demote** a row from ``in_progress``/``merged`` back to
     ``pending`` — once Claude is on it, planner reruns don't disturb it.
+
+    ``repo`` (``owner/name``) tags new rows for multi-repo scheduling.
     """
     if existing is None:
         conn.execute(
-            "INSERT INTO batches (layer, issue_number, status) VALUES (?, ?, ?)",
-            (layer, issue_number, BatchStatus.PENDING.value),
+            "INSERT INTO batches (repo, layer, issue_number, status) VALUES (?, ?, ?, ?)",
+            (repo, layer, issue_number, BatchStatus.PENDING.value),
         )
         return "inserted"
 
@@ -255,6 +258,7 @@ async def run_planner(settings: Settings) -> PlannerResult:
                         issue_number=issue_number,
                         layer=layer_index,
                         existing=existing.get(issue_number),
+                        repo=settings.github.repo,
                     )
                     if outcome == "inserted":
                         added += 1

@@ -93,6 +93,22 @@ if [ -d "$OVERLAY_SYSTEMD" ]; then
   done
 fi
 
+# --- 2.5 migrate the database (idempotent, additive) ---
+# Runs BEFORE restarting units so services come up against the new schema.
+# apply_migrations + backfill are additive and safe to re-run every deploy.
+log "running orclaw db migrate"
+if ! sudo -u "$ENGINE_USER" bash -c "
+  set -a; source /etc/orclaw/secrets.env; set +a
+  /opt/orclaw/.venv/bin/orclaw db migrate --if-exists
+"; then
+  log "DB MIGRATE FAILED — rolling back to $PREV_SHA"
+  sudo -u "$ENGINE_USER" git reset --hard "$PREV_SHA"
+  sudo -u "$ENGINE_USER" /opt/orclaw/.venv/bin/pip install --quiet -e '.[specialist]'
+  systemctl daemon-reload
+  notify "<b>💥 Auto-deploy ROLLBACK</b> db migrate failed for ${NEW_SHA:0:7}; reverted to ${PREV_SHA:0:7}"
+  exit 1
+fi
+
 systemctl daemon-reload
 
 log "restarting orclaw-* units (try-restart, gentle)"

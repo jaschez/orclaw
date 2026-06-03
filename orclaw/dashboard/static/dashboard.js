@@ -108,6 +108,7 @@ async function loadStatus() {
 async function loadDecision() {
   try {
     const d = await jget('/api/decision_preview');
+    $('#decision-next-action').textContent = d.next_action || '—';
     $('#decision-verdict').textContent = d.is_idle ? 'IDLE' : 'DISPATCH';
     $('#decision-verdict').style.color = d.is_idle ? 'var(--fg-muted)' : 'var(--accent)';
     $('#decision-issues').textContent = (d.issues_to_dispatch || []).length

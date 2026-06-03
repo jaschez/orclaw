@@ -71,7 +71,13 @@ class GitHubSettings:
     """GitHub Personal Access Token with ``repo`` scope. From env
     (``GITHUB_TOKEN``)."""
     poll_interval_seconds: int = 30
-    """How often the orchestrator polls GitHub for events."""
+    """How often the orchestrator polls GitHub for events. Polling is the
+    fallback path now that the dashboard can receive GitHub webhooks
+    (see ``webhook_secret``) — relax it once webhooks are wired."""
+    webhook_secret: str = ""
+    """Shared secret for verifying GitHub webhook deliveries
+    (``X-Hub-Signature-256``). From env (``GITHUB_WEBHOOK_SECRET``). Empty
+    means the ``/webhook/github`` endpoint is disabled (returns 503)."""
 
     def __post_init__(self) -> None:
         # Empty is allowed at construction time — the dashboard / specialist
@@ -84,8 +90,15 @@ class GitHubSettings:
 
 @dataclass(frozen=True)
 class ConcurrencySettings:
-    max_in_flight: int = 2
-    """Hard cap on simultaneous @claude mentions awaiting completion."""
+    max_in_flight: int = 1
+    """Hard ceiling on simultaneous @claude mentions awaiting completion.
+
+    Defaults to 1 — a single Claude task at a time. This is a true
+    ceiling: the runtime override (dashboard / engine_state) can only
+    *lower* the effective cap below this, never raise it above
+    (see :func:`orclaw.orchestrator.state.effective_max_in_flight`). Raise
+    this in config only when you have the Pro/Max quota headroom to run
+    more than one dispatch in parallel."""
     default_in_flight: int = 1
     """Default cap when Pro quota is observed healthy."""
 
@@ -205,9 +218,10 @@ def load_settings(
             repo=_env("GITHUB_REPO", ""),
             token=github_token,
             poll_interval_seconds=int(_env("GITHUB_POLL_INTERVAL", "30")),
+            webhook_secret=_env("GITHUB_WEBHOOK_SECRET", ""),
         ),
         concurrency=ConcurrencySettings(
-            max_in_flight=int(concurrency_raw.get("max_in_flight", 2)),
+            max_in_flight=int(concurrency_raw.get("max_in_flight", 1)),
             default_in_flight=int(concurrency_raw.get("default_in_flight", 1)),
         ),
         backoff=BackoffSettings(
