@@ -208,8 +208,15 @@ def db_init(log_level: str | None) -> None:
     default=True,
     help="Stamp legacy rows (repo='') with ORCLAW_GITHUB_REPO. On by default.",
 )
+@click.option(
+    "--if-exists",
+    "if_exists",
+    is_flag=True,
+    default=False,
+    help="Skip silently (exit 0) if the database doesn't exist yet. For deploy hooks.",
+)
 @_common_options
-def db_migrate(do_backfill: bool, log_level: str | None) -> None:
+def db_migrate(do_backfill: bool, if_exists: bool, log_level: str | None) -> None:
     """Apply additive migrations to an existing database (idempotent).
 
     Safe to run on every deploy: adds the multi-repo ``repo`` column and
@@ -221,6 +228,9 @@ def db_migrate(do_backfill: bool, log_level: str | None) -> None:
         settings = load_settings(require_secrets=False)
         db_path = settings.paths.db_path
         if not db_path.is_file():
+            if if_exists:
+                console.print(f"[yellow]·[/yellow] No database at {db_path} yet — nothing to migrate.")
+                return
             err_console.print(f"Database not found at {db_path}. Run [bold]orclaw db init[/bold] first.")
             sys.exit(1)
         with connect(db_path) as conn:
