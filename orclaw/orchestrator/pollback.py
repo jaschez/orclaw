@@ -144,11 +144,15 @@ def _pick_verdict_label(pr_labels: frozenset[str]) -> str | None:
 def complete_reviewer_runs(
     conn: sqlite3.Connection,
     prs: list[PullRequest],
+    repo: str = "",
 ) -> PollbackResult:
     """Reconcile reviewer verdicts for the given open PRs into the DB.
 
     Pure-DB function — does NOT call GitHub. The caller passes in the PRs
     already fetched (so we can share fetches across tick passes).
+
+    ``repo`` (``owner/name``) tags the recorded ``reviews`` rows for
+    multi-repo accounting; '' means a legacy/single-repo install.
     """
     completed: list[tuple[int, str]] = []
     skipped: list[tuple[int, str]] = []
@@ -188,14 +192,14 @@ def complete_reviewer_runs(
                     (new_run_status.value, run_row["id"]),
                 )
                 conn.execute(
-                    "INSERT INTO reviews (pr_number, run_id, verdict) VALUES (?, ?, ?)",
-                    (pr.number, run_row["id"], verdict.value),
+                    "INSERT INTO reviews (repo, pr_number, run_id, verdict) VALUES (?, ?, ?, ?)",
+                    (repo, pr.number, run_row["id"], verdict.value),
                 )
             else:
                 # Untracked review (PR reviewed before we knew about it).
                 conn.execute(
-                    "INSERT INTO reviews (pr_number, verdict) VALUES (?, ?)",
-                    (pr.number, verdict.value),
+                    "INSERT INTO reviews (repo, pr_number, verdict) VALUES (?, ?, ?)",
+                    (repo, pr.number, verdict.value),
                 )
                 skipped.append((pr.number, "no matching run; recorded synthetic review"))
             conn.execute("COMMIT")
@@ -490,7 +494,9 @@ async def run_pollback(settings: Settings) -> PollbackResult:
     # All the SQL stays in one connection so the reconciliations + the
     # cursor bump are atomic at the tick level.
     with connect(settings.paths.db_path) as conn:
-        review_result = complete_reviewer_runs(conn, all_prs_with_labels)
+        review_result = complete_reviewer_runs(
+            conn, all_prs_with_labels, repo=settings.github.repo
+        )
         implementer_completed = complete_implementer_runs(conn, all_prs_with_labels)
         merged_pairs = mark_merged_batches(conn, closed_prs)
         runs_timed_out = reap_stale_queued_runs(conn)

@@ -10,6 +10,7 @@ PRAGMA synchronous = NORMAL;
 -- =====================================================
 CREATE TABLE IF NOT EXISTS batches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo TEXT NOT NULL DEFAULT '',               -- 'owner/name'; '' = legacy/single-repo
   layer INTEGER NOT NULL,
   issue_number INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending'
@@ -21,8 +22,10 @@ CREATE TABLE IF NOT EXISTS batches (
 );
 
 CREATE INDEX IF NOT EXISTS idx_batches_layer_status ON batches(layer, status);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_batches_issue_active
-  ON batches(issue_number) WHERE status != 'failed' AND status != 'skipped';
+CREATE INDEX IF NOT EXISTS idx_batches_repo_status ON batches(repo, status);
+-- Uniqueness is per (repo, issue_number): two repos may each have issue #1.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_batches_repo_issue_active
+  ON batches(repo, issue_number) WHERE status != 'failed' AND status != 'skipped';
 
 CREATE TRIGGER IF NOT EXISTS batches_updated_at AFTER UPDATE ON batches
 BEGIN
@@ -34,6 +37,7 @@ END;
 -- =====================================================
 CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY,                        -- uuid
+  repo TEXT NOT NULL DEFAULT '',              -- 'owner/name'; '' = legacy/single-repo
   agent TEXT NOT NULL                         -- 'implementer' | 'reviewer' | 'specialist'
     CHECK (agent IN ('implementer', 'reviewer', 'specialist', 'batch_planner')),
   issue_number INTEGER,                       -- nullable for specialist
@@ -51,6 +55,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS idx_runs_agent_started ON runs(agent, started_at);
 CREATE INDEX IF NOT EXISTS idx_runs_issue ON runs(issue_number);
+CREATE INDEX IF NOT EXISTS idx_runs_repo ON runs(repo);
 
 -- =====================================================
 -- token_ledger: per-API-call accounting (see docs/token-budget.md)
@@ -82,6 +87,7 @@ CREATE INDEX IF NOT EXISTS idx_ledger_issue ON token_ledger(issue_number);
 -- =====================================================
 CREATE TABLE IF NOT EXISTS reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo TEXT NOT NULL DEFAULT '',               -- 'owner/name'; '' = legacy/single-repo
   pr_number INTEGER NOT NULL,
   run_id TEXT REFERENCES runs(id),
   verdict TEXT NOT NULL                       -- 'approved' | 'minor_fixes_applied' | 'needs_changes' | 'hard_block'

@@ -220,6 +220,7 @@ async def dispatch_implementer(
             issue_number=issue.number,
             status="queued",
             notes=f"comment_id={comment_id}; orchestrator_run={orchestrator_run_id}",
+            repo=gh.repo,
         )
         mark_batch_in_progress(
             conn,
@@ -358,6 +359,7 @@ async def dispatch_reviewer(
             pr_number=pr.number,
             status="queued",
             notes=f"comment_id={comment_id}; orchestrator_run={orchestrator_run_id}",
+            repo=gh.repo,
         )
         # NOTE: we don't insert into `reviews` here. That table tracks the
         # *verdict* (approved / needs-changes / …), which we won't know

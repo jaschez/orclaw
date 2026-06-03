@@ -312,12 +312,17 @@ def create_run(
     branch: str | None = None,
     status: str = "queued",
     notes: str | None = None,
+    repo: str = "",
 ) -> None:
-    """Insert a row into ``runs`` (typically status='queued' at dispatch time)."""
+    """Insert a row into ``runs`` (typically status='queued' at dispatch time).
+
+    ``repo`` (``owner/name``) tags the run for multi-repo accounting; ''
+    means a legacy/single-repo install.
+    """
     conn.execute(
-        "INSERT INTO runs (id, agent, model, issue_number, pr_number, branch, status, notes) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (run_id, agent, model, issue_number, pr_number, branch, status, notes),
+        "INSERT INTO runs (id, repo, agent, model, issue_number, pr_number, branch, status, notes) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (run_id, repo, agent, model, issue_number, pr_number, branch, status, notes),
     )
 
 

@@ -213,14 +213,32 @@ priority config are exactly the seams that make all three additive.
 
 ## 9. Phased migration
 
-| Phase | Deliverable | Risk |
-|---|---|---|
-| 0 | This plan + verify the org runner group registration on a throwaway repo | none |
-| 1 | Schema migration: add `repo` column + backfill; composite keys | low (additive) |
-| 2 | Config: repo list + per-repo `GitHubClient`; singular→list shim | low |
-| 3 | Scheduler: global slot arbiter + fairness; reviewer pass global | medium |
-| 4 | Surfaces: repo filter in dashboard/MCP/Telegram `/status` | low |
-| 5 | Webhook receiver (optional, when repo count hurts polling) | medium |
+| Phase | Deliverable | Risk | Status |
+|---|---|---|---|
+| 0 | This plan + verify the org runner group registration on a throwaway repo | none | — |
+| 1 | Schema migration: add `repo` column + backfill; composite keys | low (additive) | **done** |
+| 2 | Config: repo list + per-repo `GitHubClient`; singular→list shim | low | next |
+| 3 | Scheduler: global slot arbiter + fairness; reviewer pass global | medium | |
+| 4 | Surfaces: repo filter in dashboard/MCP/Telegram `/status` | low | |
+| 5 | Webhook receiver (when repo count hurts polling) | medium | shipped early¹ |
+
+¹ The webhook receiver (`POST /webhook/github`, [`webhooks.md`](webhooks.md))
+landed ahead of the multi-repo work — it's repo-agnostic and useful on a
+single repo today.
+
+### Phase 1 — what landed
+
+- `repo TEXT NOT NULL DEFAULT ''` on `batches`, `runs`, `reviews`
+  (`orchestrator/state/schema.sql`).
+- Idempotent migration `db.apply_migrations()` (runs on every `init_db`)
+  + `db.backfill_repo()` + a `orclaw db migrate` CLI command for existing
+  installs. Adds the column, swaps the active-uniqueness index to
+  `(repo, issue_number)`, adds `(repo, status)` / `(repo)` indexes.
+- Writes are repo-tagged: planner batch inserts, `create_run` (via
+  `GitHubClient.repo`), and reviewer reconciliation all stamp the target
+  repo. `''` remains the legacy/single-repo sentinel.
+- **Reads and the scheduler are unchanged** — still single-repo. Phase 2
+  (config repo-list) and Phase 3 (cross-repo arbiter) build on this.
 
 Each phase ships independently; after phase 3 the system is genuinely
 multi-repo on one seat.

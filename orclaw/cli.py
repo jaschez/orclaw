@@ -62,7 +62,7 @@ from rich.table import Table
 from orclaw import __version__
 from orclaw.batch_planner import run_planner
 from orclaw.config import load_settings
-from orclaw.db import connect, init_db
+from orclaw.db import apply_migrations, backfill_repo, connect, init_db
 from orclaw.exceptions import OrclawError
 from orclaw.logging import configure_logging, get_logger
 from orclaw.models import BatchStatus
@@ -199,6 +199,40 @@ def db_init(log_level: str | None) -> None:
         err_console.print(f"DB init failed: {e}")
         sys.exit(1)
     console.print(f"[green]✓[/green] Initialised database at {settings.paths.db_path}")
+
+
+@db.command("migrate")
+@click.option(
+    "--backfill-repo/--no-backfill-repo",
+    "do_backfill",
+    default=True,
+    help="Stamp legacy rows (repo='') with ORCLAW_GITHUB_REPO. On by default.",
+)
+@_common_options
+def db_migrate(do_backfill: bool, log_level: str | None) -> None:
+    """Apply additive migrations to an existing database (idempotent).
+
+    Safe to run on every deploy: adds the multi-repo ``repo`` column and
+    indexes if missing, then (unless --no-backfill-repo) tags existing
+    single-repo rows with the configured target repo.
+    """
+    configure_logging(level=log_level or "INFO")
+    try:
+        settings = load_settings(require_secrets=False)
+        db_path = settings.paths.db_path
+        if not db_path.is_file():
+            err_console.print(f"Database not found at {db_path}. Run [bold]orclaw db init[/bold] first.")
+            sys.exit(1)
+        with connect(db_path) as conn:
+            apply_migrations(conn)
+            rows = backfill_repo(conn, settings.github.repo) if do_backfill else 0
+    except OrclawError as e:
+        err_console.print(f"DB migrate failed: {e}")
+        sys.exit(1)
+    msg = f"[green]✓[/green] Migrations applied to {db_path}"
+    if do_backfill:
+        msg += f" — backfilled {rows} legacy row(s) → repo='{settings.github.repo or '(unset)'}'"
+    console.print(msg)
 
 
 # --- status ---------------------------------------------------------------

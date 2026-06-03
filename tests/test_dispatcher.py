@@ -39,10 +39,11 @@ class FakeGitHubClient:
     and ``add_label``.
     """
 
-    def __init__(self, *, next_comment_id: int = 1001) -> None:
+    def __init__(self, *, next_comment_id: int = 1001, repo: str = "owner/repo") -> None:
         self.comments: list[tuple[int, str]] = []
         self.labels: list[tuple[int, tuple[str, ...]]] = []
         self._next_comment_id = next_comment_id
+        self.repo = repo
 
     async def post_comment(self, issue_or_pr_number: int, body: str) -> int:
         cid = self._next_comment_id
@@ -157,13 +158,15 @@ class TestDispatchImplementer:
             assert row["implementer_run_id"] == result.run_id
 
             run_row = conn.execute(
-                "SELECT agent, status, issue_number, notes FROM runs WHERE id = ?",
+                "SELECT agent, status, issue_number, notes, repo FROM runs WHERE id = ?",
                 (result.run_id,),
             ).fetchone()
             assert run_row["agent"] == "implementer"
             assert run_row["status"] == RunStatus.QUEUED.value
             assert run_row["issue_number"] == 88
             assert "comment_id=1001" in run_row["notes"]
+            # Phase 1: the run is tagged with the target repo.
+            assert run_row["repo"] == "owner/repo"
 
     @pytest.mark.asyncio
     async def test_refuses_if_agent_start_already_set(
