@@ -302,6 +302,7 @@ class TestAllTools:
             "propose_engine_change",  # sprint 12
             "merge_engine_pr",  # sprint 12
             "send_daily_summary",
+            "create_issues_from_spec",
         }
         assert expected == names
 
